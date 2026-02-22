@@ -6,3 +6,6 @@ class ClientsModule(Module):
     def configure(self, binder: Binder):
         from pingpong_service.clients.github import GithubOauthAPIClient
         binder.bind(GithubOauthAPIClient, to=GithubOauthAPIClient, scope=None)
+
+        from pingpong_service.clients.other_service import OtherServiceAPIProxy
+        binder.bind(OtherServiceAPIProxy, to=OtherServiceAPIProxy, scope=None)
