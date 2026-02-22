@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # Infrastructure Services
+  # ============================================================
+  
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: demo_main
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./local_storage/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-checkpoints:
+    image: postgres:16-alpine
+    container_name: postgres-checkpoints
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: demo_checkpoints
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./local_storage/postgres_checkpoints_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./local_storage/redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Application Services (All-in-One mode)
+  # ============================================================
+  
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./local_storage/qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  all-in-one:
+    build:
+      context: ./all_in_one
+      dockerfile: Dockerfile
+    container_name: all-in-one
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/demo_main
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ============================================================
+  # Celery Worker
+  # ============================================================
+  
+  celery-worker:
+    build:
+      context: ./services/workflow-service
+      dockerfile: Dockerfile
+    container_name: celery-worker
+    command: celery -A src.workflow_service.infrastructure.celery.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/demo_main
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # ============================================================
+  # Monitoring
+  # ============================================================
+  
+  #  prometheus:
+  #    image: prom/prometheus:latest
+  #    container_name: prometheus
+  #    ports:
+  #      - "9090:9090"
+  #    volumes:
+  #      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+  #      - ./local_storage/prometheus_data:/prometheus
+  #    command:
+  #      - '--config.file=/etc/prometheus/prometheus.yml'
+  #      - '--storage.tsdb.path=/prometheus'
+  #    restart: unless-stopped
+  #
+  #  grafana:
+  #    image: grafana/grafana:latest
+  #    container_name: grafana
+  #    ports:
+  #      - "3000:3000"
+  #    environment:
+  #      - GF_SECURITY_ADMIN_PASSWORD=admin
+  #      - GF_USERS_ALLOW_SIGN_UP=false
+  #    volumes:
+  #      - ./local_storage/grafana_data:/var/lib/grafana
+  #      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning
+  #    restart: unless-stopped
+
+networks:
+  default:
+    name: network

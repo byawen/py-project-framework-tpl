@@ -1,0 +1,105 @@
+./services/pingpong-service
+├── Dockerfile
+├── Makefile
+├── README.md
+├── alembic                             # 数据库迁移
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions
+├── alembic.ini
+├── env.example                         # .env 模板 / 示例环境变量
+├── pyproject.toml
+├── service.metadata                    # 服务元数据（服务名、版本、描述等，可选）
+├── src
+│   └── pingpong_service
+│       ├── __init__.py
+│       ├── main.py                     # FastAPI 应用入口
+│       ├── foundation/                 # 基础内容（配置、容器、异常处理、日志等）
+│       │   ├── __init__.py
+│       │   ├── config.py               # 配置（pydantic-settings 推荐）
+│       │   ├── container.py            # 依赖注入容器（可选）
+│       │   ├── exception_handlers.py   # 全局异常处理器
+│       │   └── logging.py              # 日志配置（可替换为标准 logging / structlog）
+│       ├── pkg/                        # 公共/辅助/三方包实现（可全局复用的建议放 services/common）
+│       │   ├── helper/                 # 辅助工具
+│       │   │   ├── __init__.py
+│       │   │   └── string.py           # 字符串处理工具（举例）
+│       │   └── sdk                     # SDK 或外部包封装（视情况）
+│       ├── clients/                    # 外部服务客户端统一放这里
+│       │   ├── __init__.py
+│       │   ├── github/                 # 针对 github 的客户端（举例）
+│       │   │   ├── __init__.py
+│       │   │   └── oauth.py            # github oauth 客户端实现
+│       │   └── modules.py              # 客户端模块注册
+│       └── app/                        # 应用核心
+│           ├── __init__.py
+│           ├── api/                    # 展示层 / 接口层
+│           │   ├── __init__.py
+│           │   └── v1/
+│           │       ├── __init__.py
+│           │       ├── router.py       # 所有路由聚合点 prefix="/v1"
+│           │       ├── endpoints/      # Handler / Controller
+│           │       │   ├── __init__.py
+│           │       │   └── ping_pong.py   # （举例）ping-pong 相关接口
+│           │       └── schemas/        # Pydantic DTO（入参/出参）
+│           │           ├── __init__.py
+│           │           └── ping_pong.py   # （举例）ping-pong 相关 DTO
+│           ├── application/            # 应用服务层（用例 / orchestrator）
+│           │   ├── __init__.py
+│           │   ├── common/             # 通用应用组件
+│           │   │   ├── __init__.py
+│           │   │   └── exception.py    # 应用层业务异常
+│           │   ├── modules.py          # 应用模块注册
+│           │   ├── commands/           # 命令处理器(写操作)
+│           │   │   ├── __init__.py
+│           │   │   └── create_pong.py  # （举例）创建 pong 命令
+│           │   ├── queries/            # 查询处理器(读操作)
+│           │   │   ├── __init__.py
+│           │   │   └── get_ping.py     # （举例）获取 ping 查询
+│           │   ├── services/           # 封装业务逻辑/集合实现
+│           │   │   ├── __init__.py
+│           │   │   └── ping_pong_service.py    # 封装业务逻辑/集合实现
+│           ├── domain/                 # 核心领域层（最纯净）
+│           │   ├── __init__.py
+│           │   ├── common/             # 通用领域组件
+│           │   │   ├── __init__.py
+│           │   │   └── exceptions.py   # 领域规则异常（InvariantViolation 等）
+│           │   ├── modules.py          # 领域模块注册
+│           │   ├── value_objects/      # 值对象（不可变）
+│           │   │   ├── __init__.py
+│           │   │   ├── ping_message.py    # （举例）
+│           │   │   └── pong_data.py       # （举例）
+│           │   ├── entities/           # 实体 / 聚合根
+│           │   │   ├── __init__.py
+│           │   │   └── ping.py         # （举例）核心实体（可扩展为聚合根）
+│           │   ├── caches/             # 领域缓存接口（可选）
+│           │   │   ├── __init__.py
+│           │   │   └── pingpong_cache.py   # 领域缓存抽象（视情况）
+│           │   └── repositories/       # 仓储接口（抽象）
+│           │       ├── __init__.py
+│           │       ├── ping_repository.py   # （举例）
+│           │       └── pong_repository.py   # （举例）
+│           └── infrastructure/         # 基础设施 / 适配器
+│               ├── __init__.py
+│               ├── modules.py          # 基础设施模块注册
+│               ├── persistence/        # 持久化层
+│               │   ├── __init__.py
+│               │   ├── models/         # ORM 模型
+│               │   │   ├── __init__.py
+│               │   │   ├── ping_model.py    # （举例）SQLModel / SQLAlchemy 模型
+│               │   │   └── pong_model.py
+│               │   └── repositories/   # 仓储实现
+│               │       ├── __init__.py
+│               │       ├── sql_ping_repository.py   # 实现 PingRepository
+│               │       └── sql_pong_repository.py   # 实现 PongRepository
+│               ├── caches/             # 基础设施缓存实现
+│               │   ├── __init__.py
+│               │   └── pingpong_redis_cache.py   # （举例）redis 缓存实现
+│               └── security/           # 安全相关基础设施
+│                   ├── __init__.py
+│                   └── password.py     # （举例）密码哈希工具（如果项目需要）
+└── tests                               # 测试目录
+    ├── fixtures                        # 测试 fixture
+    ├── integration                     # 集成测试（api + db + 仓储等）
+    ├── unit                            # 单元测试（领域 + 应用层为主）
+    └── test_test_api.py                # 示例 api 测试文件
