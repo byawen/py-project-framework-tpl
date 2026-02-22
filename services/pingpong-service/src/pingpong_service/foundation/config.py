@@ -15,6 +15,8 @@ class Settings(AppSettings, DatabaseSettings, RedisSettings):
     
     # 外部服务配置
     GITHUB_SERVICE_URL: str = "http://localhost:8003"
+    #
+    OTHER_SERVICE_URL: str = "http://localhost:8001"
 
 
 @lru_cache

@@ -106,10 +106,10 @@ async def lifespan(app: FastAPI):
         await cleaner()
 
 
-def create_app(settings: Settings = None) -> FastAPI:
+def create_app(_settings: Settings = None) -> FastAPI:
     """创建并配置 FastAPI 应用"""
-    if settings is None:
-        settings = get_settings()
+    if _settings is None:
+        _settings = get_settings()
     
     app = FastAPI(
         title="All-in-One",
@@ -121,13 +121,13 @@ def create_app(settings: Settings = None) -> FastAPI:
     )
     
     # 存储配置
-    app.state.settings = settings
+    app.state.settings = _settings
     
     # 中间件
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
+        allow_origins=_settings.CORS_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

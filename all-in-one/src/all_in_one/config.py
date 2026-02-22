@@ -39,10 +39,11 @@ class Settings(AppSettings, DatabaseSettings, RedisSettings):
 
     # PingPong 服务配置
     def get_pingpong_settings(self):
-        from pingpong_service.foundation.config import Settings as PingPongSettings
         """获取 PingPong 服务配置"""
+        from pingpong_service.foundation.config import Settings as PingPongSettings
         # 从当前配置中提取 PingPong 相关的配置
         return PingPongSettings(
+            MODEL="all-in-one",  # 必须写上
             APP_NAME=self.APP_NAME + "-pingpong",
             DEBUG=self.DEBUG,
             ENVIRONMENT=self.ENVIRONMENT,
