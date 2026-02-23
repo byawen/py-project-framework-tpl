@@ -71,7 +71,7 @@ def get_all_replacements(service_name: str, short_prefix: str, port: str = "8000
     display_name = service_name.replace('-', ' ').title()  # new-app -> New App
     
     return [
-        # 精确匹配（避免误替换）
+        # 第一批：精确匹配（避免误替换）
         
         # 数据库名替换 (保持 kebab 格式) - 必须在 "pingpong" 替换之前
         ("pingpong-db", f"{kebab_name}-db"),
@@ -83,37 +83,38 @@ def get_all_replacements(service_name: str, short_prefix: str, port: str = "8000
         
         # 端口替换 - 必须在 "8000" 替换之前
         ("8001", port),  # 默认端口替换
+        ("8002", port),  # 默认端口替换 (Makefile)
         
         # FastAPI 标题替换
         ("Ping Pong Service", f"{display_name} Service"),
         ("PingPong Service", f"{display_name} Service"),
         
-        # 显示名称替换 (PascalCase)
+        # 第二批：显示名称替换 (PascalCase)
         ("PingPong", pascal_name),
         ("PingpPong", pascal_name),
         
-        # 服务名称替换 (目录名使用 kebab 格式)
+        # 第三批：服务名称替换 (目录名使用 kebab 格式)
         ("pingpong-service", f"{kebab_name}-service"),
         ("pingpong_service", f"{snake_name}_service"),
         
-        # 前缀替换
+        # 第四批：前缀替换
         ("pipo", short_prefix),
         
-        # 表名前缀
+        # 第五批：表名前缀
         ("pipo_", f"{short_prefix}_"),
         
-        # 类名替换
+        # 第六批：类名替换
         ("PingPongCache", f"{pascal_name}Cache"),
         ("PingPongRedisCache", f"{pascal_name}RedisCache"),
         ("PingPongService", f"{pascal_name}Service"),
         
-        # 文件名替换
+        # 第七批：文件名替换
         ("ping_pong", snake_name),
         
-        # 通用替换 (放最后)
+        # 第八批：通用替换 (放最后)
         ("pingpong", snake_name),
         
-        # 修复被误替换的显示名称 (如 PingPong -> new_app 后变成 new_app Service)
+        # 第九批：修复被误替换的显示名称 (如 PingPong -> new_app 后变成 new_app Service)
         ("new_app Service", f"{display_name} Service"),
     ]
 
@@ -164,6 +165,7 @@ def process_file(file_path: Path, replacements: dict) -> None:
     # 如果文件名改变了，重命名文件
     if new_name != file_path.name:
         new_path = file_path.parent / new_name
+        # 确保目标文件不存在
         if not new_path.exists():
             file_path.rename(new_path)
             file_path = new_path
@@ -195,6 +197,7 @@ def rename_directory(dir_path: Path, replacements: dict) -> None:
         new_path = dir_path.parent / new_name
         if not new_path.exists():
             dir_path.rename(new_path)
+            # 更新 dir_path 以便后续处理
             return new_path
     return dir_path
 
@@ -230,10 +233,10 @@ def process_service(service_name: str, short_prefix: str, port: str = "8000") ->
     # 获取替换规则
     replacements = get_all_replacements(service_name, short_prefix, port)
     
-    # 重命名所有目录
+    # 第一步：重命名所有目录
     rename_directory(new_service_dir, replacements)
-
-    # 处理所有文件（包括重命名和内容替换）
+    
+    # 第二步：处理所有文件（包括重命名和内容替换）
     for item in new_service_dir.rglob('*'):
         if item.is_file():
             process_file(item, replacements)
@@ -382,6 +385,7 @@ def main():
     short_prefix = args.short_prefix
     port = args.port
     
+    # 验证参数
     if not re.match(r'^[a-zA-Z][a-zA-Z0-9-]*$', service_name):
         print(f"错误: 服务名称 '{service_name}' 格式不正确")
         print("应使用字母、数字和连字符，不能以数字开头")
@@ -421,6 +425,7 @@ def main():
         print(f"错误: 端口 '{port}' 已被其他服务占用")
         sys.exit(1)
     
+    # 生成服务
     print(f"\n开始生成服务: {service_name} (前缀: {short_prefix}, 端口: {port})")
     print("=" * 50)
     

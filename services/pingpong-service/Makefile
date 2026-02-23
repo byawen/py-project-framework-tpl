@@ -67,7 +67,7 @@ migrate-down:
 .PHONY: migration-create
 migration-create:
 ifndef NAME
-	@echo "$(RED)Error: NAME is required. Usage: make migration-create NAME=add_xxx_field$(NC)"
+	@echo "$(RED)Error: NAME is required. Usage: make migration-create NAME=initial OR make migration-create NAME=add_xxx_field$(NC)"
 	@exit 1
 endif
 	@echo "$(GREEN)Creating migration: $(NAME)$(NC)"
@@ -88,12 +88,19 @@ migration-check:
 # ============================================================
 
 # 默认端口
-PORT ?= 8001
+PORT ?= 8002
+# .env 文件路径（相对于 account-service 目录）
+ENV_FILE ?= .env
+# 如果 .env 文件存在则设置 ENV_FILE 环境变量
+ENV_FILE_ARG := $(shell [ -f $(ENV_FILE) ] && echo "--env-file $(ENV_FILE)" || echo "")
 
 .PHONY: dev
 dev:
 	@echo "$(GREEN)Starting pingpong-service development server on port $(PORT)...$(NC)"
-	@cd src && uvicorn pingpong_service.main:app --reload --port $(PORT) --host 0.0.0.0
+	@PYTHONPATH=src uvicorn pingpong_service.main:app --port $(PORT) --host 0.0.0.0 $(ENV_FILE_ARG) \
+		--reload \
+		--reload-dir ../
+
 
 # ============================================================
 # 代码检查

@@ -16,15 +16,24 @@ load_dotenv(env_file)
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.orm import declarative_base
 
 from alembic import context
 
-# Import the Base from services_common
-from services_common.database import BaseModel
+# ============================================================
+# 创建服务独立的 Base 类（用于 alembic 迁移）
+# 这样每个服务的迁移只会扫描自己的模型
+# ============================================================
+Base = declarative_base()
 
-# Import all models here to ensure they are registered with Base.metadata
+# Import all models here and bind to service-specific Base
 from pingpong_service.app.infrastructure.persistence.models.ping_model import PingModel
 from pingpong_service.app.infrastructure.persistence.models.pong_model import PongModel
+
+# 将模型表复制到服务独立的 Base（关键步骤！）
+for model in [PingModel, PongModel]:
+    model.__table__.metadata = Base.metadata
+    Base.metadata._add_table(model.__table__.name, model.__table__.schema)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -47,7 +56,7 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-target_metadata = BaseModel.metadata
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

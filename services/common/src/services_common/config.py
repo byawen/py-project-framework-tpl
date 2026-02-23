@@ -28,6 +28,9 @@ class AppSettings(BaseSettings):
     # 跨域资源共享
     CORS_ORIGINS: list[str] = ["*"]
 
+    # 模式
+    MODEL: str = "standalone"    # all-in-one or standalone
+
 
 class DatabaseSettings(BaseSettings):
     """数据库配置"""

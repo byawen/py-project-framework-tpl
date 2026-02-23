@@ -1,8 +1,6 @@
 """异常类模块 - 所有服务共享的异常类"""
 
 from typing import Any, Optional
-from fastapi import HTTPException, status
-
 
 class BaseException(Exception):
     """服务基础异常类"""
@@ -159,29 +157,3 @@ class ServiceUnavailableException(BaseException):
             code="SERVICE_UNAVAILABLE",
             details={"service": service},
         )
-
-def http_exception_from_service_exception(exc: BaseException) -> HTTPException:
-    """将服务异常转换为 FastAPI HTTPException"""
-    status_code_map = {
-        "NOT_FOUND": status.HTTP_404_NOT_FOUND,
-        "ALREADY_EXISTS": status.HTTP_409_CONFLICT,
-        "UNAUTHORIZED": status.HTTP_401_UNAUTHORIZED,
-        "FORBIDDEN": status.HTTP_403_FORBIDDEN,
-        "VALIDATION_ERROR": status.HTTP_422_UNPROCESSABLE_ENTITY,
-        "RATE_LIMIT_EXCEEDED": status.HTTP_429_TOO_MANY_REQUESTS,
-        "SERVICE_UNAVAILABLE": status.HTTP_503_SERVICE_UNAVAILABLE,
-        "LLM_ERROR": status.HTTP_502_BAD_GATEWAY,
-        "AGENT_ERROR": status.HTTP_500_INTERNAL_SERVER_ERROR,
-        "WORKFLOW_ERROR": status.HTTP_500_INTERNAL_SERVER_ERROR,
-    }
-    
-    status_code = status_code_map.get(exc.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    return HTTPException(
-        status_code=status_code,
-        detail={
-            "message": exc.message,
-            "code": exc.code,
-            "details": exc.details,
-        },
-    )

@@ -1,4 +1,4 @@
 """API Endpoints Package"""
-from pingpong_service.app.api.v1.endpoints import ping_pong
+from pingpong_service.app.api.v1.endpoints import pp_demo
 
-__all__ = ["ping_pong"]
+__all__ = ["pp_demo.py"]

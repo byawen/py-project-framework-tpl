@@ -12,11 +12,12 @@ from injector import Injector, Module, Binder
 from sqlalchemy.ext.asyncio.engine import AsyncEngine
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from all_in_one.foundation.exception_handlers import register_exception_handlers
 from all_in_one.services import services_registry
 from services_common import configure_uvicorn_logging
 from services_common.database import DatabaseManager
 from services_common.redis import RedisManager
-from services_common.middleware import RequestIDMiddleware
+from services_common.middleware import RequestIDMiddleware, ErrorHandlingMiddleware
 from services_common.logging import Logger
 
 from all_in_one.foundation.container import set_injector
@@ -110,7 +111,7 @@ def create_app(_settings: Settings = None) -> FastAPI:
     """创建并配置 FastAPI 应用"""
     if _settings is None:
         _settings = get_settings()
-    
+
     app = FastAPI(
         title="All-in-One",
         description="All microservices combined into a single application",
@@ -122,9 +123,9 @@ def create_app(_settings: Settings = None) -> FastAPI:
     
     # 存储配置
     app.state.settings = _settings
-    
-    # 中间件
-    app.add_middleware(RequestIDMiddleware)
+
+    # Middleware - 最后添加的最先执行，所以 ErrorHandlingMiddleware 要放在最前面
+    # 执行顺序: ErrorHandling -> RequestID -> CORS -> 路由
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_settings.CORS_ORIGINS,
@@ -132,6 +133,11 @@ def create_app(_settings: Settings = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(ErrorHandlingMiddleware)
+
+    # Exception handlers
+    register_exception_handlers(app)
     
     # 健康检查
     @app.get("/health")

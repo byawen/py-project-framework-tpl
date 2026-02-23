@@ -4,12 +4,38 @@
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import Any, Generic, List, Optional, TypeVar
 
 from pydantic import BaseModel, Field
 
 # 泛型类型
 T = TypeVar("T")
+
+# 默认 API 版本
+DEFAULT_API_VERSION = "v1"
+
+
+class ResponseResult(str, Enum):
+    """响应结果枚举 - 用于标识请求结果类型"""
+
+    # 成功
+    SUCCESS = "success"
+    CREATED = "created"
+    UPDATED = "updated"
+    DELETED = "deleted"
+
+    # 客户端错误
+    BAD_REQUEST = "error.bad_request"
+    UNAUTHORIZED = "error.unauthorized"
+    FORBIDDEN = "error.forbidden"
+    NOT_FOUND = "error.not_found"
+    CONFLICT = "error.conflict"
+    VALIDATION_ERROR = "error.validation"
+
+    # 服务器错误
+    INTERNAL_ERROR = "error.internal"
+    SERVICE_UNAVAILABLE = "error.service_unavailable"
 
 
 class ResponseCode:
@@ -36,6 +62,8 @@ class ResponseCode:
 class BaseResponse(BaseModel):
     """基础响应模型"""
     
+    api_version: str = Field(default=DEFAULT_API_VERSION, description="API 版本")
+    result: ResponseResult = Field(default=ResponseResult.SUCCESS, description="响应结果标识")
     code: int = Field(default=ResponseCode.SUCCESS, description="响应状态码")
     message: str = Field(default="Success", description="响应消息")
     timestamp: datetime = Field(default_factory=datetime.now, description="响应时间戳")
@@ -43,6 +71,8 @@ class BaseResponse(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
+                "api_version": "v1",
+                "result": "success",
                 "code": 200,
                 "message": "Success",
                 "timestamp": "2024-01-01T00:00:00Z"
@@ -58,6 +88,8 @@ class DataResponse(BaseResponse, Generic[T]):
     class Config:
         json_schema_extra = {
             "example": {
+                "api_version": "v1",
+                "result": "success",
                 "code": 200,
                 "message": "Success",
                 "timestamp": "2024-01-01T00:00:00Z",
@@ -75,6 +107,8 @@ class ListResponse(BaseResponse, Generic[T]):
     class Config:
         json_schema_extra = {
             "example": {
+                "api_version": "v1",
+                "result": "success",
                 "code": 200,
                 "message": "Success",
                 "timestamp": "2024-01-01T00:00:00Z",
@@ -96,6 +130,8 @@ class PageResponse(BaseResponse, Generic[T]):
     class Config:
         json_schema_extra = {
             "example": {
+                "api_version": "v1",
+                "result": "success",
                 "code": 200,
                 "message": "Success",
                 "timestamp": "2024-01-01T00:00:00Z",
@@ -112,6 +148,7 @@ class ErrorResponse(BaseResponse):
     """错误响应模型"""
     
     code: int = Field(default=ResponseCode.INTERNAL_SERVER_ERROR, description="错误状态码")
+    result: ResponseResult = Field(default=ResponseResult.INTERNAL_ERROR, description="响应结果标识")
     message: str = Field(default="Internal Server Error", description="错误消息")
     detail: Optional[Any] = Field(default=None, description="详细错误信息")
     trace_id: Optional[str] = Field(default=None, description="请求追踪ID")
@@ -119,6 +156,8 @@ class ErrorResponse(BaseResponse):
     class Config:
         json_schema_extra = {
             "example": {
+                "api_version": "v1",
+                "result": "error.internal",
                 "code": 500,
                 "message": "Internal Server Error",
                 "timestamp": "2024-01-01T00:00:00Z",
@@ -132,52 +171,61 @@ class ErrorResponse(BaseResponse):
 # 响应构建函数
 # ============================================================
 
-def success(data: Any = None, message: str = "Success") -> DataResponse:
+def success(data: Any = None, message: str = "Success", result: ResponseResult = ResponseResult.SUCCESS) -> DataResponse:
     """构建成功响应
     
     Args:
         data: 响应数据
         message: 响应消息
+        result: 响应结果标识
         
     Returns:
         DataResponse 实例
     """
     return DataResponse(
+        api_version=DEFAULT_API_VERSION,
+        result=result,
         code=ResponseCode.SUCCESS,
         message=message,
         data=data,
     )
 
 
-def created(data: Any = None, message: str = "Created successfully") -> DataResponse:
+def created(data: Any = None, message: str = "Created successfully", result: ResponseResult = ResponseResult.CREATED) -> DataResponse:
     """构建创建成功响应
     
     Args:
         data: 响应数据
         message: 响应消息
+        result: 响应结果标识
         
     Returns:
         DataResponse 实例
     """
     return DataResponse(
+        api_version=DEFAULT_API_VERSION,
+        result=result,
         code=ResponseCode.CREATED,
         message=message,
         data=data,
     )
 
 
-def list_response(data: List[Any], total: int = 0, message: str = "Success") -> ListResponse:
+def list_response(data: List[Any], total: int = 0, message: str = "Success", result: ResponseResult = ResponseResult.SUCCESS) -> ListResponse:
     """构建列表响应
     
     Args:
         data: 数据列表
         total: 总数量
         message: 响应消息
+        result: 响应结果标识
         
     Returns:
         ListResponse 实例
     """
     return ListResponse(
+        api_version=DEFAULT_API_VERSION,
+        result=result,
         code=ResponseCode.SUCCESS,
         message=message,
         data=data,
@@ -190,7 +238,8 @@ def page_response(
     page: int = 1,
     page_size: int = 20,
     total: int = 0,
-    message: str = "Success"
+    message: str = "Success",
+    result: ResponseResult = ResponseResult.SUCCESS,
 ) -> PageResponse:
     """构建分页响应
     
@@ -200,6 +249,7 @@ def page_response(
         page_size: 每页数量
         total: 总数量
         message: 响应消息
+        result: 响应结果标识
         
     Returns:
         PageResponse 实例
@@ -207,6 +257,8 @@ def page_response(
     total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
     
     return PageResponse(
+        api_version=DEFAULT_API_VERSION,
+        result=result,
         code=ResponseCode.SUCCESS,
         message=message,
         data=data,
@@ -222,6 +274,7 @@ def error(
     code: int = ResponseCode.INTERNAL_SERVER_ERROR,
     detail: Any = None,
     trace_id: Optional[str] = None,
+    result: ResponseResult = ResponseResult.INTERNAL_ERROR,
 ) -> ErrorResponse:
     """构建错误响应
     
@@ -230,11 +283,14 @@ def error(
         code: 错误状态码
         detail: 详细错误信息
         trace_id: 请求追踪ID
+        result: 响应结果标识
         
     Returns:
         ErrorResponse 实例
     """
     return ErrorResponse(
+        api_version=DEFAULT_API_VERSION,
+        result=result,
         code=code,
         message=message,
         detail=detail,
@@ -244,24 +300,24 @@ def error(
 
 def bad_request(message: str = "Bad Request", detail: Any = None) -> ErrorResponse:
     """构建 400 错误响应"""
-    return error(message=message, code=ResponseCode.BAD_REQUEST, detail=detail)
+    return error(message=message, code=ResponseCode.BAD_REQUEST, detail=detail, result=ResponseResult.BAD_REQUEST)
 
 
 def unauthorized(message: str = "Unauthorized", detail: Any = None) -> ErrorResponse:
     """构建 401 错误响应"""
-    return error(message=message, code=ResponseCode.UNAUTHORIZED, detail=detail)
+    return error(message=message, code=ResponseCode.UNAUTHORIZED, detail=detail, result=ResponseResult.UNAUTHORIZED)
 
 
 def forbidden(message: str = "Forbidden", detail: Any = None) -> ErrorResponse:
     """构建 403 错误响应"""
-    return error(message=message, code=ResponseCode.FORBIDDEN, detail=detail)
+    return error(message=message, code=ResponseCode.FORBIDDEN, detail=detail, result=ResponseResult.FORBIDDEN)
 
 
 def not_found(message: str = "Not Found", detail: Any = None) -> ErrorResponse:
     """构建 404 错误响应"""
-    return error(message=message, code=ResponseCode.NOT_FOUND, detail=detail)
+    return error(message=message, code=ResponseCode.NOT_FOUND, detail=detail, result=ResponseResult.NOT_FOUND)
 
 
 def conflict(message: str = "Conflict", detail: Any = None) -> ErrorResponse:
     """构建 409 错误响应"""
-    return error(message=message, code=ResponseCode.CONFLICT, detail=detail)
+    return error(message=message, code=ResponseCode.CONFLICT, detail=detail, result=ResponseResult.CONFLICT)

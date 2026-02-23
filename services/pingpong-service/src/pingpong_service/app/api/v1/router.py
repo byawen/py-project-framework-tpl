@@ -4,9 +4,9 @@
 """
 from fastapi import APIRouter
 
-from pingpong_service.app.api.v1.endpoints import ping_pong
+from pingpong_service.app.api.v1.endpoints import pp_demo
 
 api_router = APIRouter(prefix="/v1/pingpong")
 
 # 包含端点路由
-api_router.include_router(ping_pong.router)
+api_router.include_router(pp_demo.router)

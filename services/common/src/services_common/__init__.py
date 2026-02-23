@@ -3,6 +3,8 @@
 from services_common.logging import Logger, get_logger
 from services_common.response import (
     ResponseCode,
+    ResponseResult,
+    DEFAULT_API_VERSION,
     BaseResponse,
     DataResponse,
     ListResponse,
@@ -36,7 +38,6 @@ from services_common.exceptions import (
     AuthenticationFailedException,
     TokenExpiredException,
     TokenBlacklistedException,
-    http_exception_from_service_exception,
 )
 from services_common.exception_handlers import register_base_exception_handlers
 from services_common.uvicorn_logger import configure_uvicorn_logging
@@ -69,6 +70,8 @@ __all__ = [
     "get_logger",
     # Response
     "ResponseCode",
+    "ResponseResult",
+    "DEFAULT_API_VERSION",
     "BaseResponse",
     "DataResponse",
     "ListResponse",
@@ -101,7 +104,6 @@ __all__ = [
     "AuthenticationFailedException",
     "TokenExpiredException",
     "TokenBlacklistedException",
-    "http_exception_from_service_exception",
     # Exception_handler
     "register_base_exception_handlers",
     # Redis

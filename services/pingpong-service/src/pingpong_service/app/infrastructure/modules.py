@@ -17,7 +17,3 @@ class InfrastructureModule(Module):
         from pingpong_service.app.domain.repositories.pong_repository import PongRepository
         from pingpong_service.app.infrastructure.persistence.repositories.sql_pong_repository import SQLPongRepository
         binder.bind(PongRepository, to=SQLPongRepository, scope=None)
-
-        # Service
-        from pingpong_service.app.application.services.pp_service import PPService
-        binder.bind(PPService, to=PPService, scope=None)

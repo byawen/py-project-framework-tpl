@@ -11,7 +11,7 @@ class Settings(AppSettings, DatabaseSettings, RedisSettings):
     PORT: int = 8001
     
     # 服务特定配置
-    REDIS_PREFIX: str = "PingPong"
+    REDIS_PREFIX: str = "pipo"
     
     # 外部服务配置
     GITHUB_SERVICE_URL: str = "http://localhost:8003"

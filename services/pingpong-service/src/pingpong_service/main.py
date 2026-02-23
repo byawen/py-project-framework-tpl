@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services_common import configure_uvicorn_logging
 from services_common.database import DatabaseManager
 from services_common.redis import RedisManager
-from services_common.middleware import RequestIDMiddleware
+from services_common.middleware import RequestIDMiddleware, ErrorHandlingMiddleware
 from services_common.logging import Logger
 
 from pingpong_service.foundation.logging import LogManager
@@ -127,9 +127,9 @@ def create_app(_settings: Settings = None) -> FastAPI:
     
     # Store settings in app state
     app.state.settings = _settings
-    
-    # Middleware
-    app.add_middleware(RequestIDMiddleware)
+
+    # Middleware - 最后添加的最先执行，所以 ErrorHandlingMiddleware 要放在最前面
+    # 执行顺序: ErrorHandling -> RequestID -> CORS -> 路由
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_settings.CORS_ORIGINS,
@@ -137,6 +137,8 @@ def create_app(_settings: Settings = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(ErrorHandlingMiddleware)
     
     # Exception handlers
     register_exception_handlers(app)
