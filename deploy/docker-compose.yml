@@ -53,10 +53,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ============================================================
-  # Application Services (All-in-One mode)
-  # ============================================================
-  
   qdrant:
     image: qdrant/qdrant:v1.7.4
     container_name: qdrant
@@ -71,27 +67,31 @@ services:
       timeout: 10s
       retries: 3
 
-  all-in-one:
-    build:
-      context: ./all_in_one
-      dockerfile: Dockerfile
-    container_name: all-in-one
-    environment:
-      - ENVIRONMENT=production
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/demo_main
-      - REDIS_URL=redis://redis:6379/0
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-    ports:
-      - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-    restart: unless-stopped
+  # ============================================================
+  # Application Services (All-in-One mode)
+  # ============================================================
+
+#  all-in-one:
+#    build:
+#      context: ./all-in-one
+#      dockerfile: Dockerfile
+#    container_name: all-in-one
+#    environment:
+#      - ENVIRONMENT=production
+#      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/demo_main
+#      - REDIS_URL=redis://redis:6379/0
+#      - QDRANT_HOST=qdrant
+#      - QDRANT_PORT=6333
+#    ports:
+#      - "8000:8000"
+#    depends_on:
+#      postgres:
+#        condition: service_healthy
+#      redis:
+#        condition: service_healthy
+#      qdrant:
+#        condition: service_healthy
+#    restart: unless-stopped
 
   # ============================================================
   # Celery Worker
