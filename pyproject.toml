@@ -1,0 +1,69 @@
+[project]
+name = "app-service"
+version = "2.0.0"
+description = "Microservices Architecture"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    {name = "ByAwen", email = "byawen@aliyun.com"}
+]
+license = {text = "MIT"}
+dependencies = [
+    "alembic>=1.18.4",
+    "python-multipart>=0.0.22",
+    "services-common",
+    "pingpong-service",
+    "all-in-one",
+    "workers-common",
+    "pingpong-worker",
+    "worker-in-one",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.8.0",
+    "mypy>=1.14.0",
+    "black>=25.0.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+]
+
+[tool.uv.workspace]
+members = [
+    "all-in-one",
+    "services/common",
+    "services/pingpong-service",
+    "workers/common",
+    "workers/pingpong-worker",
+    "worker-in-one",]
+
+[tool.uv.sources]
+all-in-one = { workspace = true }
+services-common = { workspace = true }
+pingpong-service = { workspace = true }
+workers-common = { workspace = true }
+pingpong-worker = { workspace = true }
+worker-in-one = { workspace = true }
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[dependency-groups]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
