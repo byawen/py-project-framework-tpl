@@ -16,7 +16,7 @@ import sys
 from typing import Callable
 
 from worker_in_one.broker import BrokerRunner, WorkerSpec
-from worker_in_one.foundation.config import Settings, get_settings
+from worker_in_one.config import Settings, get_settings
 from worker_in_one.foundation.logging import get_logger
 from worker_in_one.workers import workers_registry
 

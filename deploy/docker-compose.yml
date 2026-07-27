@@ -6,33 +6,16 @@ services:
   # ============================================================
   
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     container_name: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: demo_main
-    ports:
-      - "5432:5432"
+    restart: always
     volumes:
       - ./local_storage/postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  postgres-checkpoints:
-    image: postgres:16-alpine
-    container_name: postgres-checkpoints
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: demo_checkpoints
     ports:
-      - "5433:5432"
-    volumes:
-      - ./local_storage/postgres_checkpoints_data:/var/lib/postgresql/data
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -40,32 +23,16 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
     container_name: redis
-    command: redis-server --appendonly yes
+    image: redis:7.2.3
+    restart: always
+    volumes:
+      - ./local_storage/redis/data:/data
     ports:
       - "6379:6379"
-    volumes:
-      - ./local_storage/redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  qdrant:
-    image: qdrant/qdrant:v1.7.4
-    container_name: qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - ./local_storage/qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    environment:
+      TZ: Asia/Shanghai
+    command: redis-server /etc/redis/redis.conf
 
   # ============================================================
   # Application Services (All-in-One mode)

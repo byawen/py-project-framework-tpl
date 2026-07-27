@@ -9,8 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from workers_common.database import BaseModel
 
 
-class PongModel(BaseModel):
-    """SQLAlchemy Pong 模型"""
+class PIPOPongModel(BaseModel):
+    """SQLAlchemy Pong 模型（类名带 worker 前缀 PIPO 全大写，表名 pipo_ 全小写）"""
 
     __tablename__ = "pipo_pong"
 

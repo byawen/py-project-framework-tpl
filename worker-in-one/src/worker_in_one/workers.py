@@ -17,7 +17,7 @@ from workers_common.resource_keys import DB_DEFAULT_KEY, REDIS_DEFAULT_KEY
 from workers_common.shared_resources import SharedResources
 
 from worker_in_one.broker.spec import WorkerSpec
-from worker_in_one.foundation.config import Settings
+from worker_in_one.config import Settings
 
 
 async def workers_registry(_settings: Settings, logger: Logger) -> tuple[list[WorkerSpec], Callable]:

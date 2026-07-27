@@ -10,7 +10,7 @@ from services_common.database import DatabaseManager
 from pingpong_service.foundation.logging import get_logger
 from pingpong_service.app.domain.entities.ping import Ping
 from pingpong_service.app.domain.repositories.ping_repository import PingRepository
-from pingpong_service.app.infrastructure.persistence.models.ping_model import PingModel
+from pingpong_service.app.infrastructure.persistence.models.ping_model import PIPOPingModel
 
 logger = get_logger(__name__)
 
@@ -22,7 +22,7 @@ class SQLPingRepository(PingRepository):
     def __init__(self, dm: DatabaseManager):
         self.dm = dm
     
-    def _to_entity(self, model: PingModel) -> Ping:
+    def _to_entity(self, model: PIPOPingModel) -> Ping:
         """将 SQLAlchemy 模型转换为领域实体"""
         return Ping(
             ping_id=model.ping_id,
@@ -30,9 +30,9 @@ class SQLPingRepository(PingRepository):
             created_at=model.created_at,
         )
     
-    def _to_model(self, entity: Ping) -> PingModel:
+    def _to_model(self, entity: Ping) -> PIPOPingModel:
         """将领域实体转换为 SQLAlchemy 模型"""
-        return PingModel(
+        return PIPOPingModel(
             ping_id=entity.ping_id,
             message=entity.message,
             created_at=entity.created_at,
@@ -43,7 +43,7 @@ class SQLPingRepository(PingRepository):
         logger.info("按 ID 查询 Ping", operation="pingpong.repo.ping.get_by_id", ping_id=ping_id)
         async with self.dm.session() as session:
             result = await session.execute(
-                select(PingModel).where(PingModel.ping_id == ping_id)
+                select(PIPOPingModel).where(PIPOPingModel.ping_id == ping_id)
             )
             model = result.scalar_one_or_none()
         logger.info(
@@ -66,7 +66,7 @@ class SQLPingRepository(PingRepository):
         """更新 Ping"""
         async with self.dm.session() as session:
             result = await session.execute(
-                select(PingModel).where(PingModel.ping_id == ping.ping_id)
+                select(PIPOPingModel).where(PIPOPingModel.ping_id == ping.ping_id)
             )
             model = result.scalar_one()
             model.message = ping.message
@@ -78,7 +78,7 @@ class SQLPingRepository(PingRepository):
         """删除 Ping"""
         async with self.dm.session() as session:
             result = await session.execute(
-                select(PingModel).where(PingModel.ping_id == ping_id)
+                select(PIPOPingModel).where(PIPOPingModel.ping_id == ping_id)
             )
             model = result.scalar_one()
             await session.delete(model)

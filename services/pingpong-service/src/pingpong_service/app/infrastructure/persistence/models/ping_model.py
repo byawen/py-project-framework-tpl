@@ -8,8 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from services_common.database import BaseModel
 
 
-class PingModel(BaseModel):
-    """SQLAlchemy Ping 模型"""
+class PIPOPingModel(BaseModel):
+    """SQLAlchemy Ping 模型（类名带服务前缀 PIPO 全大写，表名 pipo_ 全小写）"""
     __tablename__ = "pipo_ping"
     
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
