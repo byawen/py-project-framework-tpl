@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from worker_in_one.broker.base import AggregateBroker
-    from worker_in_one.foundation.config import Settings
+    from worker_in_one.config import Settings
 
 # 聚合 Broker 注册表 — 新增中间件只需在此添加映射
 AGGREGATE_BROKER_REGISTRY: dict[str, str] = {

@@ -1,6 +1,6 @@
 # Worker 开发指南（从 0 到 1 到部署）
 
-> 面向新成员的端到端实战手册。读完本文你应当能够：独立创建一个新 Worker、理解它和 Service 的关系、写一个任务处理器、配置队列/重试/Beat 定时任务、跑通启动与日志，并理解它如何被部署（单进程聚合运行）。
+> 面向新成员的端到端实战手册。读完本文你应当能够：独立创建一个新 Worker、理解它和 Service 的关系、写一个任务处理器、配置队列/重试/Beat 定时任务、跑通启动与日志，并了解它如何被部署（单进程聚合运行）。
 >
 > 本文与 `develop/ai-coding-worker-app.md` 互补：后者是"约束规范"（给 AI / Code Review，强调红线），本文是"上手教程"（给人，强调流程与为什么）。建议先读姊妹篇 `develop/service-development-guide.md` 第 5–12 节，因为 **Worker 复用 Service 的整套 DDD 分层与 DI 机制**，本文不重复讲基础，只讲 Worker 特有部分。
 >
@@ -146,7 +146,7 @@ CELERY_BROKER_URL=redis://localhost:6379/1
 CELERY_BROKER_RESULT_BACKEND=redis://localhost:6379/2
 ```
 
-### 4.2 为什么要再包一层 Broker 抽象
+### 4.2 为何要再包一层 Broker 抽象
 
 为了不把代码焊死在 Celery 上。`workers_common/broker/` 定义了 `BaseBroker` ABC：
 
@@ -228,12 +228,25 @@ make dev-worker WORKER=notify-worker
 
 ```python
 # worker-in-one/src/worker_in_one/workers.py 的 workers_registry()
-from notify_worker.main import setup as notify_setup
-from notify_worker.handlers import register_all_handlers as notify_register
-worker_settings = _settings.get_notify_worker_settings()
-cleaner = await notify_setup(worker_settings, logger, shared_resources=shared_resources)
-specs.append(WorkerSpec(name="notify-worker", broker_type="celery",
-                        register_handlers=notify_register, settings=worker_settings))
+async def workers_registry(_settings: Settings, logger: Logger) -> tuple[list[WorkerSpec], Callable]:
+    try:
+        from xxx_worker.main import setup as xxx_worker_setup
+        from xxx_worker.handlers import register_all_handlers as xxx_register
+        worker_settings = _settings.get_xxx_worker_settings()
+        cleaner = await xxx_worker_setup(worker_settings, logger, shared_resources=shared_resources)
+        cleaner_list.append(cleaner)
+        specs.append(
+            WorkerSpec(
+                name="xxx-worker",
+                broker_type="celery",
+                register_handlers=xxx_register,
+                settings=worker_settings,
+            )
+        )
+        logger.info("Loaded worker: xxx-worker")
+    except Exception as e:
+        logger.warning(f">>>>>>> Failed to load xxx-worker exception: {e}")
+        logger.warning(f">>>>>>> Failed to load xxx-worker stack: {traceback.format_exc()}")
 ```
 
 ```python
@@ -1102,8 +1115,8 @@ class NotificationRepository(ABC):
 
 ```python
 # app/infrastructure/persistence/models/notification_model.py
-class NotificationModel(BaseModel):
-    __tablename__ = "ntf_notification"   # ⚠️ 前缀
+class NTFNotificationModel(BaseModel):
+    __tablename__ = "ntf_notification"   # ⚠️ 前缀（全小写表名）；类名用全大写前缀 {PREFIX_UPPER}
     notification_id = Column(String, primary_key=True)
     to = Column(String, nullable=False)
     subject = Column(String, nullable=False)
@@ -1257,7 +1270,7 @@ ruff/mypy 配置同 Service（`line-length=100`、`py312`、`strict=true`）。
 - **队列边界才允许裸 dict**；进 application 前转 pydantic。
 - **一个任务一个 handler 文件**；topic 命名 `{pkg}.{task}`（两段点分 snake）。
 - **队列路由用前缀字段**（`<PREFIX>_CELERY_*`），启动覆盖到 `CELERY_*`。
-- **ORM 表名带前缀**（`<prefix>_<表>`）；DB 操作必 async。
+- **ORM 表名带前缀**（`<prefix>_<表>`，全小写）；**ORM 类名带全大写前缀** `<PREFIX_UPPER><表>Model`（如 worker_prefix=`ntf` → `NTFNotificationModel`，表名 `ntf_notification`）；DB 操作必 async。详见 `ai-coding-worker-app.md` §8（worker-in-one 多服务共用同一 `DeclarativeBase`，类名不带前缀会冲突）。
 - **clients 五件套**；`app/`/`handlers/` 不直接 import httpx。
 - **新增依赖登记**对应 `modules.py`。
 - **日志每条带 `operation=`**；fork 场景注意 `reinit_file_logging` 调用链不被破坏。
@@ -1268,7 +1281,7 @@ ruff/mypy 配置同 Service（`line-length=100`、`py312`、`strict=true`）。
 - [ ] 目录结构合规（`handlers/` + `app/{application,domain,infrastructure}` + `foundation` + `clients` + `pkg`）
 - [ ] handler 同步签名 + 桥接 async；业务逻辑在 application 层
 - [ ] 队列边界外无裸 dict；payload 进 application 前转模型
-- [ ] ORM 表名带前缀；Repository 返回 Entity，有 `_to_entity`/`_to_model`
+- [ ] ORM 表名带前缀（全小写）；ORM 类名带全大写前缀 `<PREFIX_UPPER><表>Model`；Repository 返回 Entity，有 `_to_entity`/`_to_model`
 - [ ] clients 五件套；`app/`/`handlers/` 无 httpx
 - [ ] 新依赖在 `modules.py` 注册；topic 在 `registry.py` 注册
 - [ ] `CELERY_TASK_ROUTES` 配了 topic→queue；超时配置合理

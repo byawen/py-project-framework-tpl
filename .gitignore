@@ -89,3 +89,5 @@ stores
 # OS
 .DS_Store
 Thumbs.db
+.local_storage/*
+temp/

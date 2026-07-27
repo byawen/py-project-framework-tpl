@@ -36,14 +36,14 @@ worker 的占位符推导来源：`worker_name` 与 `worker_prefix`（无 `servi
 | `{snake}` | `worker_name`（snake） | `notify` | 包目录 `{snake}_worker` |
 | `{pkg}` | = `{snake}_worker` | `notify_worker` | **所有 import 根** |
 | `{pascal}` | `worker_name` 各段首字母大写 | `Notify` | 服务级类名 `class {Pascal}Service` |
-| `{prefix}` | `worker_prefix`（全小写） | `ntf` | 表名前缀 `ntf_xxx`、Redis 前缀、队列名前缀、`{PREFIX}_CELERY_*` 配置前缀 |
-| `{ServicePrefix}` | `{prefix}` 首字母大写 | `Ntf` | **ORM 类名前缀** `class {ServicePrefix}{表}Model` → `NtfNotificationModel` |
-| `{PREFIX_UPPER}` | `{prefix}` 全大写 | `NTF` | Celery 配置前缀 `NTF_CELERY_TASK_ROUTES` 等 |
+| `{prefix}` | `worker_prefix`（全小写） | `ntf` | **表名前缀** `ntf_xxx`、Redis 前缀、队列名前缀、`{PREFIX}_CELERY_*` 配置前缀 |
+| `{PREFIX_UPPER}` | `{prefix}` 全大写 | `NTF` | **ORM 类名前缀** `class {PREFIX_UPPER}{表}Model` → `NTFNotificationModel`；Celery 配置前缀 `NTF_CELERY_TASK_ROUTES` 等 |
 | `{domain}` | 任务的业务域 | `notify` | handler 文件 `{域}_handler.py`、队列第 2 段 `{domain}` |
 
 **硬约束**（与 service §0.1 一致）：
-- `{ServicePrefix}` 仅首字母大写：`ntf`→`Ntf`、`pipo`→`Pipo`。不是全大写。
-- ORM 类名前缀与表名前缀来自同一个 `worker_prefix`，大小写对应：表 `ntf_notification` ↔ 类 `NtfNotificationModel`。
+- ORM 类名前缀一律用 `{PREFIX_UPPER}` —— **`worker_prefix` 整体转全大写**（不是首字母大写）。`ntf`→`NTF`、`pipo`→`PIPO`。
+- 表名前缀用 `{prefix}`（全小写）。类名前缀（全大写）与表名前缀（全小写）来自同一个 `worker_prefix`，仅大小写不同：表 `ntf_notification` ↔ 类 `NTFNotificationModel`、表 `pipo_ping` ↔ 类 `PIPOPingModel`。
+- ❌ **不要**把 ORM 类名前缀写成首字母大写（`NtfNotificationModel`）或无前缀（`NotificationModel`）。目的见 §8：all-in-one / worker-in-one 合并运行时多个服务共享同一 SQLAlchemy `DeclarativeBase`，类名不带前缀或前缀风格不统一都会冲突。
 - import 根一律 `{pkg}`（如 `from notify_worker.app.domain...`）。
 - `generate-worker` 后包名/前缀/import 根已正确，**AI 不得重命名目录或顶层包**。
 
@@ -571,7 +571,9 @@ NTF_CELERY_BEAT_SCHEDULE: dict = {
 
 > ℹ️ **Worker 无 HTTP 路由**：worker 不暴露 HTTP，因此**不涉及 service §5.1.1 的 path/tags/聚合 prefix 命名约束**。worker 的命名对象只有 Python 文件/类/函数（snake_case/PascalCase，多词用 `_`，如 `notify_handler.py`、`handle_send_email`）与 Celery topic/queue（点分 snake：topic 两段 `{pkg}.{task}` 如 `notify_worker.send_email`，queue 三段 `{pkg}.{domain}.{sub}` 如 `notify_worker.email.send`，见 §4.3）。不要把 HTTP 路由的 kebab-case 规则套到 worker 的文件名/topic/queue 上。
 
-> ⚠️ **ORM Model 类名必须带服务前缀**（与 service 规范 §5.4 一致）：`{ServicePrefix}{表}Model`。前缀取 `service.metadata` 中 `service_prefix` 的首字母大写形式。例如 pingpong-worker（`service_prefix = "pipo"`）的 notification 表 → `PipoNotificationModel`，表名 `pipo_notification`。目的：all-in-one 合并运行时多个服务共享同一 `DeclarativeBase`，类名不带前缀会冲突。
+> ⚠️ **ORM Model 类名必须带服务前缀**（与 service 规范 §5.4 一致）：`{PREFIX_UPPER}{表}Model`（**全大写前缀**）。前缀取 `worker_prefix`（来自 `worker.metadata` 的 `worker_prefix`，等价于 service 的 `service_prefix`）的整体全大写形式。例如 pingpong-worker（`worker_prefix = "pipo"`）的 notification 表 → `PIPONotificationModel`，表名 `pipo_notification`；notify-worker（`worker_prefix = "ntf"`）的 notification 表 → `NTFNotificationModel`，表名 `ntf_notification`。目的：all-in-one / worker-in-one 合并运行时多个服务共享同一 `DeclarativeBase`，类名不带前缀会冲突、前缀风格不统一难以辨识归属。
+>
+> **仲裁规则**：`PREFIX_UPPER = worker_prefix.upper()`（整体全大写）。`ntf`→`NTF`、`pipo`→`PIPO`、`coo`→`COO`。现存 `pingpong-worker` 模板的 `PingModel`/`PongModel`（无前缀）是**待修脏模板**，**不得仿写**；复刻新 worker 时必须手工改为 `{PREFIX_UPPER}{表}Model`。
 
 ---
 
@@ -591,7 +593,7 @@ NTF_CELERY_BEAT_SCHEDULE: dict = {
 10. ❌ **`modules.py` 顶层 import 业务类 / 缺 `scope=None` / `DomainModule` 里塞绑定**：照 service §6.1.1 四条硬约定。
 11. ❌ **重命名脚手架生成的目录或顶层包**：`generate-worker` 后包名/前缀/import 根已正确，AI 不得改名（见 §0.1）。
 12. ❌ **`run_worker()` 里前缀覆盖语句漏改**：`PIPO_CELERY_*` 必须改为本 worker 的 `{PREFIX}_CELERY_*` 覆盖到 `CELERY_*`（见 §5）。
-13. ❌ **ORM Model 类名/表名不带 worker 前缀**：`class {ServicePrefix}{表}Model`、表名 `{prefix}_{表}`（与 service §5.4 同）。
+13. ❌ **ORM Model 类名/表名不带 worker 前缀**：`class {PREFIX_UPPER}{表}Model`（全大写前缀）、表名 `{prefix}_{表}`（全小写）（与 service §5.4 同）。
 14. ❌ **topic 用三段带 `tasks` 或用 `-`/驼峰**：topic 统一两段 `{pkg}.{task}` 点分 snake（`notify_worker.send_email`），不带 `tasks` 段，不用 `-`/驼峰。见 §4.3.1。
 15. ❌ **队列名不三段点分**：queue 统一三段 `{pkg}.{domain}.{sub}` 点分 snake（`content_ops_worker.video.processing`），不用一段、不用 `_` 整体连接、不用 `-`。见 §4.3.2。
 16. ❌ **topic 写裸字符串而非常量**：topic 应用模块级常量（`SEND_EMAIL_TOPIC`）声明，registry 与投递方共用，禁止散落裸字符串导致拼写漂移。
@@ -616,7 +618,7 @@ NTF_CELERY_BEAT_SCHEDULE: dict = {
 - [ ] **外部服务调用在 `clients/`，不在 `infrastructure/`**；二者不互相 import
 - [ ] 层间/clients/repository 无裸 dict（队列边界除外）
 - [ ] 新增依赖已在对应 `modules.py` 注册，import 在 `configure()` 体内、`scope=None`、`DomainModule` 空（§6.1.1）
-- [ ] ORM 类名/表名带 worker 前缀（`NtfNotificationModel` / `ntf_notification`）
+- [ ] ORM 类名/表名带 worker 前缀（`NTFNotificationModel` / `ntf_notification`）
 
 **配置与装配**
 - [ ] 配置继承 `workers_common.WorkersSettings`，无 Web 字段，import 来自 `workers_common`
@@ -664,7 +666,7 @@ app/application/services/notify_service.py          [不建] 本例为单聚合�
 app/application/modules.py                           [改]   注册 command（无 service 则不注册 service）
 app/domain/entities/notification.py                 [新增] 实体
 app/domain/repositories/notification_repository.py  [新增] 仓储接口
-app/infrastructure/persistence/models/notification_model.py        [新增] ORM（类名 PipoNotificationModel，表名 pipo_notification）
+app/infrastructure/persistence/models/notification_model.py        [新增] ORM（类名 PIPONotificationModel，表名 pipo_notification）
 app/infrastructure/persistence/repositories/sql_notification_repository.py  [新增] 实现
 app/infrastructure/modules.py                       [改]   绑定
 clients/account_service/...                          [新增] 外部服务（interface/schemas/remote/local/proxy）
@@ -817,7 +819,7 @@ application/create_notification.CreateNotificationCommand
    │  repo.create(notification)                         ← 注入接口
    ▼
 infrastructure/sql_notification_repository
-   │  _to_model → PipoNotificationModel → 落库
+   │  _to_model → PIPONotificationModel → 落库
    ▼
 返回 Notification(Entity) ──► NotifyResult(模型).model_dump() ──► result backend
 ```

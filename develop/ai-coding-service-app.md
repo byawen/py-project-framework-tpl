@@ -17,7 +17,7 @@
 
 ## 0.1 占位符与命名推导（消除"怎么从服务名推出各种名字"的歧义）
 
-本规范大量使用 `{pkg}`、`{ServicePrefix}`、`{聚合}` 等占位符。它们**必须**从 `service.metadata` 按下表严格推导，不得自由命名。AI 产出前先填这张表，再据此生成所有文件名/类名/import 路径。
+本规范大量使用 `{pkg}`、`{SERVICE_PREFIX_UPPER}`、`{聚合}` 等占位符。它们**必须**从 `service.metadata` 按下表严格推导，不得自由命名。AI 产出前先填这张表，再据此生成所有文件名/类名/import 路径。
 
 设 `service.metadata` 为：
 
@@ -31,15 +31,15 @@
 | `{snake}` | `service_name`（已是 snake） | `content_quality` | 包目录名 `{snake}_service`、DB 名 `{kebab}-db` |
 | `{pkg}` | = `{snake}_service` | `content_quality_service` | **所有 import 根**，如 `from {pkg}.app.domain...` |
 | `{pascal}` | `service_name` 各段首字母大写拼接 | `ContentQuality` | 服务级类名 `class {Pascal}Service`、FastAPI title |
-| `{prefix}` | `service_prefix`（全小写原样） | `cqal` | 表名前缀 `cqal_xxx`、Redis 前缀、alembic version_table |
-| `{ServicePrefix}` | `{prefix}` 首字母大写 | `Cqal` | **ORM 类名前缀** `class {ServicePrefix}{表}Model` → `CqalUserModel` |
-| `{SERVICE_PREFIX_UPPER}` | `{prefix}` 全大写 | `CQAL` | 自定义配置项前缀 `CQAL_XXX` |
+| `{prefix}` | `service_prefix`（全小写原样） | `cqal` | **表名前缀** `cqal_xxx`、Redis 前缀、alembic version_table |
+| `{SERVICE_PREFIX_UPPER}` | `{prefix}` 全大写 | `CQAL` | **ORM 类名前缀** `class {SERVICE_PREFIX_UPPER}{表}Model` → `CQALUserModel`；自定义配置项前缀 `CQAL_XXX` |
 | `{service_code}` | `service.metadata` 的 `service_code` | `6` | 写入 `foundation/biz_code.py` 的 `SERVICE_CODE` |
 
 **硬约束**：
-- `{ServicePrefix}` 一律是 `{prefix}` 的**首字母大写**（只大写第一个字母，不是每段大写）。`acc`→`Acc`、`pipo`→`Pipo`、`cqal`→`Cqal`。不要写成 `ACC`/`PIPO`/`CQAL`。
+- ORM 类名前缀一律用 `{SERVICE_PREFIX_UPPER}` —— **`service_prefix` 整体转全大写**（不是首字母大写、不是只大写一段）。`acc`→`ACC`、`pipo`→`PIPO`、`cqal`→`CQAL`、`dcol`→`DCOL`。
+- 表名前缀一律用 `{prefix}`（全小写原样）。**类名前缀与表名前缀来自同一个 `service_prefix`，仅大小写不同**：表 `cqal_user` ↔ 类 `CQALUserModel`、表 `pipo_ping` ↔ 类 `PIPOPingModel`。
 - import 根一律用 `{pkg}`（如 `from content_quality_service.app.domain...`），**不要**用 `{snake}` 或 `{kebab}`。
-- ORM 类名前缀与表名前缀来自**同一个** `service_prefix`，二者必须大小写对应：表 `cqal_user` ↔ 类 `CqalUserModel`。
+- ❌ **不要**把 ORM 类名前缀写成首字母大写（`CqalUserModel`）或无前缀（`UserModel`）。目的见 §5.4：all-in-one 合并运行时多个服务共享同一 SQLAlchemy `DeclarativeBase`，类名不带服务前缀或前缀风格不统一都会冲突 / 难以辨识归属服务。
 
 > ⚠️ **优先复刻 pingpong-service 模板**：所有命名推导已硬编码在 `generate-service` 脚本的替换表里。脚手架生成后，包名/前缀/import 根已经是正确的——**AI 不得重命名任何目录或顶层包**，只需在 `app/` 内按业务新增文件。
 
@@ -182,7 +182,7 @@ class SQLUserRepository(UserRepository):
 
 # ✅ 正确：调外部服务走 clients，infrastructure 只碰自己的库
 # clients/account_service/remote_api.py 里用 httpx
-# app/infrastructure/.../sql_user_repository.py 只操作 AccUserModel（本服务表）
+# app/infrastructure/.../sql_user_repository.py 只操作 ACCUserModel（本服务表）
 ```
 
 > domain 的 Repository 接口只描述**本服务聚合**的持久化；若一个用例需要"查本服务订单 + 查外部用户信息"，application 层同时注入 `OrderRepository`（domain→infrastructure）和 `AccountService`（clients interface→APIProxy），二者在 application 内协作，**绝不**让 infrastructure 去调 clients，也**绝不**让 clients 去碰 ORM。
@@ -224,8 +224,8 @@ async def get_user(self, uid: str) -> dict:
     return {"id": resp.json()["id"], "name": resp.json()["name"]}
 
 # ❌ 禁止：repository 返回 ORM Model
-async def get_by_id(self, id: str) -> AccUserModel:
-    return await session.get(AccUserModel, id)
+async def get_by_id(self, id: str) -> ACCUserModel:
+    return await session.get(ACCUserModel, id)
 
 # ❌ 禁止：endpoint 返回裸 dict
 @router.get("/users/{uid}")
@@ -244,7 +244,7 @@ async def get_user(self, uid: str) -> UserInfo:
 
 # ✅ repository 返回领域实体
 async def get_by_id(self, id: str) -> Optional[User]:
-    model = await session.get(AccUserModel, id)
+    model = await session.get(ACCUserModel, id)
     return self._to_entity(model) if model else None
 
 # ✅ endpoint 返回 DataResponse[DTO]
@@ -266,7 +266,7 @@ async def get_user(uid: str, q: GetUserQuery = Depends(get_user_query)) -> DataR
 | `domain/value_objects/` | 一个值对象一个文件 | `{vo}.py` | `email.py` → `class Email` |
 | `domain/repositories/` | 一个聚合一个接口文件 | `{聚合}_repository.py` | `user_repository.py` → `class UserRepository(ABC)` |
 | `domain/caches/` | 一个缓存域一个接口文件 | `{域}_cache.py` | `user_cache.py` |
-| `infrastructure/persistence/models/` | 一张表一个文件 | `{表}_model.py` | `user_model.py` → `class AccUserModel` |
+| `infrastructure/persistence/models/` | 一张表一个文件 | `{表}_model.py` | `user_model.py` → `class ACCUserModel` |
 | `infrastructure/persistence/repositories/` | 一个聚合一个实现文件 | `sql_{聚合}_repository.py` | `sql_user_repository.py` |
 | `application/commands/` | 一个写用例一个文件（单聚合写） | `{动词}_{名词}.py` | `create_user.py` |
 | `application/queries/` | 一个读用例一个文件（只读） | `get_{名词}.py` / `list_{名词}.py` | `get_user.py` |
@@ -624,17 +624,16 @@ class UserRepository(ABC):
 
 - 一个聚合一个 `sql_{聚合}_repository.py`，类名 `SQL{聚合}Repository`，继承 domain 接口。
 - 必须实现 `_to_entity()` / `_to_model()` 完成 Model↔Entity 转换。
-- 一张表一个 `{表}_model.py`，类名 **`{ServicePrefix}{表}Model`**（首字母大写的服务前缀 + 表名 + Model），如 account-service 的 `UserModel` → `AccUserModel`，pingpong-worker 的 `PingModel` → `PipoPingModel`。
-  - **前缀来源**：`service.metadata` 中的 `service_prefix`（如 `acc` / `pipo`），取其首字母大写形式作为类名前缀。
-  - **目的**：all-in-one 合并运行时多个服务共享同一 SQLAlchemy `DeclarativeBase`，类名不带前缀会冲突。
-- **表名必须以 `service_prefix` 为前缀**（全小写），如 `acc_user`、`pipo_ping`。
+- 一张表一个 `{表}_model.py`，类名 **`{SERVICE_PREFIX_UPPER}{表}Model`**（**全大写的服务前缀** + PascalCase 表名 + `Model`），如 account-service 的 `UserModel` → `ACCUserModel`，pingpong-service（`service_prefix = "pipo"`）的 `PingModel` → `PIPOPingModel`，content-quality-service 的 `UserModel` → `CQALUserModel`。
+  - **前缀来源**：`service.metadata` 中的 `service_prefix`（如 `acc` / `pipo` / `cqal`），取其**整体全大写**形式作为类名前缀。
+  - **目的**：all-in-one 合并运行时多个服务共享同一 SQLAlchemy `DeclarativeBase`，类名不带服务前缀会冲突；前缀用全大写短码可一眼辨识归属服务、与全小写的表名前缀形成对照。
+- **表名必须以 `service_prefix` 为前缀**（全小写），如 `acc_user`、`pipo_ping`。表名前缀（全小写）与类名前缀（全大写）来自同一个 `service_prefix`，仅大小写不同。
+- **表名 ↔ 类名对照**：`acc_user` ↔ `ACCUserModel`、`pipo_ping` ↔ `PIPOPingModel`、`cqal_user` ↔ `CQALUserModel`。
 - 所有 DB 操作必须 `async/await`，禁止同步。
 
-> ⚠️ **ORM 类名前缀的仲裁规则（消除历史偏差）**：统一公式 `ServicePrefix = service_prefix[0].upper() + service_prefix[1:]`（**仅首字母大写**，非全大写）。`acc`→`Acc`、`cops`→`Cops`、`pipo`→`Pipo`、`cqal`→`Cqal`。
+> **新建/修改服务一律以本规范公式为准**（全大写前缀），不得照抄既有服务的首字母大写或无前缀写法。
 >
-> 现存代码有历史偏差，**不得作为仿写依据**：`account-service` 用了全大写 `ACCPingModel`/`ACCUserModel`、`content-service` 用了无前缀 `PingModel`/`PongModel`、`pingpong` 模板同理用无前缀 `PingModel`。这些是早期遗留。**新建/修改服务一律以本规范公式为准**（首字母大写），不得照抄既有服务的全大写或无前缀写法。既有服务可低优先级整改为 `AccXxxModel`。
->
-> 注意 `pingpong` 模板因其 `service_code=0` 占位、ORM 类名为 `PingModel`（无前缀），是"待修脏模板"——复刻新服务时**必须手工**把 `{表}Model` 改为 `{ServicePrefix}{表}Model`（脚手架当前不会自动替换类名，仅替换表名前缀 `pipo_`）。
+> 注意 `pingpong` 模板因其 `service_code=0` 占位、ORM 类名为 `PingModel`（无前缀），是"待修脏模板"——复刻新服务时**必须手工**把 `{表}Model` 改为 `{SERVICE_PREFIX_UPPER}{表}Model`（脚手架当前不会自动替换类名，仅替换表名前缀 `pipo_`）。
 
 #### 5.4.1 ORM Model 写法（统一 `Mapped[]` 风格，不得混用 `Column`）
 
@@ -647,8 +646,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from services_common.database import BaseModel
 
 
-class AccUserModel(BaseModel):
-    """User ORM 模型（一表一文件；类名带服务前缀 Acc，表名带 service_prefix）"""
+class ACCUserModel(BaseModel):
+    """User ORM 模型（一表一文件；类名带服务前缀 ACC，表名带 service_prefix 全小写）"""
     __tablename__ = "acc_user"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True, comment="自增ID")
@@ -663,6 +662,7 @@ class AccUserModel(BaseModel):
 - `comment` 约束**仅适用于用户业务字段**；基类已声明的 `id`/`created_at`/`updated_at` 不强制重写 comment。
 - 业务主键用 `user_id`（`generate_id()` 生成的业务 ID），自增 `id` 仅作物理主键/索引。
 - 字符串字段必须给长度（`String(36)`），bool/datetime 用对应类型。
+- `__tablename__` 与类名前缀来自同一个 `service_prefix`，大小写对应：表 `acc_user` ↔ 类 `ACCUserModel`、表 `pipo_ping` ↔ 类 `PIPOPingModel`。
 
 #### 5.4.2 SQL Repository 写法（session + flush，禁止显式 commit）
 
@@ -682,7 +682,7 @@ from services_common.database import DatabaseManager
 from {pkg}.foundation.logging import get_logger
 from {pkg}.app.domain.entities.user import User
 from {pkg}.app.domain.repositories.user_repository import UserRepository
-from {pkg}.app.infrastructure.persistence.models.user_model import AccUserModel
+from {pkg}.app.infrastructure.persistence.models.user_model import ACCUserModel
 
 logger = get_logger(__name__)
 
@@ -694,18 +694,18 @@ class SQLUserRepository(UserRepository):
     def __init__(self, dm: DatabaseManager):
         self.dm = dm
 
-    def _to_entity(self, model: AccUserModel) -> User:
+    def _to_entity(self, model: ACCUserModel) -> User:
         return User(user_id=model.user_id, username=model.username,
                     is_active=model.is_active, created_at=model.created_at)
 
-    def _to_model(self, entity: User) -> AccUserModel:
-        return AccUserModel(user_id=entity.user_id, username=entity.username,
+    def _to_model(self, entity: User) -> ACCUserModel:
+        return ACCUserModel(user_id=entity.user_id, username=entity.username,
                             is_active=entity.is_active, created_at=entity.created_at)
 
     async def get_by_id(self, user_id: str) -> Optional[User]:
         async with self.dm.session() as session:
             result = await session.execute(
-                select(AccUserModel).where(AccUserModel.user_id == user_id)
+                select(ACCUserModel).where(ACCUserModel.user_id == user_id)
             )
             model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
@@ -772,7 +772,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from services_common.database import BaseModel
 
 
-class AccUserModel(BaseModel):        # ← 类名带服务前缀（acc → Acc），与表名前缀一致
+class ACCUserModel(BaseModel):        # ← 类名带服务前缀（acc → ACC 全大写）
     __tablename__ = "acc_user"        # ← 表名带 service_prefix（全小写）
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True, comment="自增ID")
@@ -1105,7 +1105,7 @@ def get_settings() -> Settings:
 | 实体类 | 名词单数 PascalCase | `User`, `Order` |
 | 仓储接口 | `{聚合}Repository` | `UserRepository` |
 | 仓储实现 | `SQL{聚合}Repository` | `SQLUserRepository` |
-| ORM 模型类 | `{ServicePrefix}{表}Model` | `AccUserModel` |
+| ORM 模型类 | `{SERVICE_PREFIX_UPPER}{表}Model` | `ACCUserModel` |
 | ORM 表名 | `{service_prefix}_{表}` | `acc_user` |
 | Command | `{动词}{名词}Command` | `CreateUserCommand` |
 | Query | `Get/List{名词}Query` | `GetUserQuery` |
@@ -1136,7 +1136,7 @@ def get_settings() -> Settings:
 11. ❌ 新增依赖后忘记在 `modules.py` 注册。
 12. ❌ 在 `demo`/模板文件上直接写业务实现（应新建对应业务文件）。
 13. ❌ 新增第三方依赖未在 `pyproject.toml` 声明版本。
-14. ❌ **ORM Model 类名不带服务前缀**：必须 `class {ServicePrefix}{表}Model`（如 `AccUserModel`），表名必须 `{service_prefix}_{表}`（如 `acc_user`）。不带前缀会导致 all-in-one 合并时类名/表名冲突。
+14. ❌ **ORM Model 类名不带服务前缀**：必须 `class {SERVICE_PREFIX_UPPER}{表}Model`（如 `ACCUserModel`），表名必须 `{service_prefix}_{表}`（如 `acc_user`）。不带前缀会导致 all-in-one 合并时类名/表名冲突。
 15. ❌ **外部服务/外部接口调用写进 `infrastructure/`**：调别的服务/第三方（httpx、SDK）只能放 `clients/`；`infrastructure/` 只适配本服务自己的 DB/Redis。见 §2.1。`infrastructure/` 内出现 `httpx` / 调外部 URL 即为不合格。
 16. ❌ **`infrastructure` 与 `clients` 互相 import**：二者平行，不互相依赖，只在 application 层协作。
 17. ❌ **`modules.py` 顶层 import 业务类 / 缺 `scope=None` / 把 domain 接口→实现的绑定写进 DomainModule**：见 §6.1.1 四条硬约定。
@@ -1153,7 +1153,7 @@ def get_settings() -> Settings:
 - [ ] 依赖方向符合 §2 矩阵，无反向 import
 - [ ] **每个写用例在 `commands/` 有 Command 类、每个读用例在 `queries/` 有 Query 类，逻辑写在其中**
 - [ ] **应用层归属符合 §5.2 决策树**：只读→queries；单聚合写→commands（逻辑直接写在 execute）；跨聚合/多步/多用例复用→services（command 委托但不退化为空壳）；纯领域规则无 IO→domain service
-- [ ] **命名按 §0.1 占位符表推导**（`{pkg}`/`{ServicePrefix}` 首字母大写/表名前缀），未重命名脚手架生成的目录或顶层包
+- [ ] **命名按 §0.1 占位符表推导**（`{pkg}`/`{SERVICE_PREFIX_UPPER}` 全大写前缀/表名前缀），未重命名脚手架生成的目录或顶层包
 - [ ] **demo 代码已清理**：无 `pong`/`ping`/`PAP`/`pp_demo`/`biz_code_test` 残留，删除的类在 `modules.py` 同步移除绑定（§0.2）
 
 **数据载体**
@@ -1170,7 +1170,7 @@ def get_settings() -> Settings:
 **DI 与配置**
 - [ ] 新增依赖已在对应 `modules.py` 注册
 - [ ] `modules.py` 的 import 在 `configure()` 方法体内，绑定用 `bind(接口, to=实现, scope=None)`，`DomainModule` 为空 `pass`（§6.1.1）
-- [ ] 表名带 `service_prefix`；**ORM 类名带服务前缀**（`AccUserModel`，首字母大写）；自定义配置带服务前缀
+- [ ] 表名带 `service_prefix`（全小写）；**ORM 类名带服务前缀**（`ACCUserModel`，全大写前缀）；自定义配置带服务前缀
 - [ ] **外部服务调用在 `clients/`，不在 `infrastructure/`；二者不互相 import**（§2.1）
 - [ ] ORM Model 统一 `Mapped[]` 风格，字段带 `comment`（§5.4.1）
 - [ ] Repository 用 `async with self.dm.session()` + `flush()`，无显式 `commit`；返回 Entity（§5.4.2）
@@ -1380,7 +1380,7 @@ app/domain/entities/user.py                               [新增] 实体（聚�
 app/domain/repositories/user_repository.py                [新增] 仓储接口
 app/domain/common/exceptions.py                           [改]   领域异常（绑定 BizCode）
 foundation/biz_code.py                                    [新增] 服务业务码定义（SERVICE_CODE + BizCode 枚举）
-app/infrastructure/persistence/models/user_model.py       [新增] ORM 模型（类名 AccUserModel，表名 acc_user）
+app/infrastructure/persistence/models/user_model.py       [新增] ORM 模型（类名 ACCUserModel，表名 acc_user）
 app/infrastructure/persistence/repositories/sql_user_repository.py  [新增] 仓储实现
 app/infrastructure/modules.py                             [改]   绑定接口→实现
 app/application/commands/create_user.py                   [新增] 写用例
@@ -1516,8 +1516,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from services_common.database import BaseModel
 
 
-class AccUserModel(BaseModel):
-    """User ORM 模型（一表一文件；类名带服务前缀 Acc，表名带 service_prefix）"""
+class ACCUserModel(BaseModel):
+    """User ORM 模型（一表一文件；类名带服务前缀 ACC，表名带 service_prefix）"""
     __tablename__ = "acc_user"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True, comment="自增ID")
@@ -1538,7 +1538,7 @@ from services_common.database import DatabaseManager
 from {pkg}.foundation.logging import get_logger
 from {pkg}.app.domain.entities.user import User
 from {pkg}.app.domain.repositories.user_repository import UserRepository
-from {pkg}.app.infrastructure.persistence.models.user_model import AccUserModel
+from {pkg}.app.infrastructure.persistence.models.user_model import ACCUserModel
 
 logger = get_logger(__name__)
 
@@ -1551,7 +1551,7 @@ class SQLUserRepository(UserRepository):
         self.dm = dm
 
     # —— 两个转换方法是硬约束：Model 不得越界，必须转 Entity ——
-    def _to_entity(self, model: AccUserModel) -> User:
+    def _to_entity(self, model: ACCUserModel) -> User:
         return User(
             user_id=model.user_id,
             username=model.username,
@@ -1560,8 +1560,8 @@ class SQLUserRepository(UserRepository):
             created_at=model.created_at,
         )
 
-    def _to_model(self, entity: User) -> AccUserModel:
-        return AccUserModel(
+    def _to_model(self, entity: User) -> ACCUserModel:
+        return ACCUserModel(
             user_id=entity.user_id,
             username=entity.username,
             email=entity.email,
@@ -1572,7 +1572,7 @@ class SQLUserRepository(UserRepository):
     async def get_by_id(self, user_id: str) -> Optional[User]:
         async with self.dm.session() as session:
             result = await session.execute(
-                select(AccUserModel).where(AccUserModel.user_id == user_id)
+                select(ACCUserModel).where(ACCUserModel.user_id == user_id)
             )
             model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
@@ -1587,7 +1587,7 @@ class SQLUserRepository(UserRepository):
     async def update(self, user: User) -> User:
         async with self.dm.session() as session:
             result = await session.execute(
-                select(AccUserModel).where(AccUserModel.user_id == user.user_id)
+                select(ACCUserModel).where(ACCUserModel.user_id == user.user_id)
             )
             model = result.scalar_one()
             model.username = user.username
@@ -1599,7 +1599,7 @@ class SQLUserRepository(UserRepository):
     async def delete(self, user_id: str) -> None:
         async with self.dm.session() as session:
             result = await session.execute(
-                select(AccUserModel).where(AccUserModel.user_id == user_id)
+                select(ACCUserModel).where(ACCUserModel.user_id == user_id)
             )
             model = result.scalar_one()
             await session.delete(model)
@@ -1864,7 +1864,7 @@ services/user_service.UserService
    │  user_repo.create(user)                       ← 依赖接口（抽象）
    ▼
 infrastructure/sql_user_repository.SQLUserRepository
-   │  _to_model(user) → AccUserModel → session.add    ← Entity → Model 落库
+   │  _to_model(user) → ACCUserModel → session.add    ← Entity → Model 落库
    ▼
 返回 User(Entity) ──► CreateUserResult ──► UserResponse.from_entity ──► success(DataResponse[UserResponse])
 ```
@@ -1885,7 +1885,7 @@ infrastructure/sql_user_repository.SQLUserRepository
 | 多 Repo 同文件 | `repositories.py` 里写 `UserRepo` + `OrderRepo` | 拆 `user_repository.py` / `order_repository.py` |
 | domain 依赖 | domain 里 `import sqlalchemy` / DTO | domain 只用 pydantic + 自身类型 |
 | 表名 | `__tablename__ = "user"` | `__tablename__ = "acc_user"`（带 service_prefix） |
-| Model 类名 | `class UserModel` | `class AccUserModel`（带服务前缀，防 all-in-one 类名冲突） |
+| Model 类名 | `class UserModel` | `class ACCUserModel`（带服务前缀全大写，防 all-in-one 类名冲突） |
 | 同步 DB | `session.query(...).all()` | `await session.execute(select(...))` |
 | 新增依赖 | 写完类忘记注册 | 同步在对应 `modules.py` `binder.bind(...)` |
 | 业务逻辑位置 | 写在 endpoint 里 | 下沉到 command/query/service + 实体方法 |

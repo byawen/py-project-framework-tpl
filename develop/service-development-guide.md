@@ -1,6 +1,6 @@
 # Service 开发指南（从 0 到 1 到部署）
 
-> 面向新成员的端到端实战手册。读完本文你应当能够：独立创建一个新服务、在四层 DDD 架构中实现一个完整的业务用例、接入外部服务、运行/测试/迁移，并理解它如何被部署。
+> 面向新成员的端到端实战手册。读完本文你应当能够：独立创建一个新服务、在四层 DDD 架构中实现一个完整的业务用例、接入外部服务、运行/测试/迁移，并了解它如何被部署。
 >
 > 本文是 README 的细化版，与 `develop/ai-coding-service-app.md` 互补：后者是“约束规范”（给 AI / Code Review 用，强调红线），本文是“上手教程”（给人用，强调流程）。规范里只讲结论的地方，这里讲为什么、怎么落地。
 
@@ -89,7 +89,7 @@ HTTP 请求 → FastAPI 中间件链 → API 层(端点)
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/byawen/py-project-framework-tpl 01-claw-project && cd 01-claw-project
+git clone <repo-url> 01-claw-project && cd 01-claw-project
 
 # 2. 创建虚拟环境并安装 uv
 python3.12 -m venv .venv
@@ -99,7 +99,7 @@ pip install uv
 # 3. 安装全部 workspace 成员（services/common 是地基，会被各服务以 workspace 方式依赖）
 make install          # 等价于在每个 service 里 uv sync
 
-# 4. 起本地依赖（PostgreSQL + Redis）
+# 4. 起本地依赖（PostgreSQL + Redis）- 可选
 make compose-up       # 实际读 deploy/local/docker-compose.yml
 ```
 
@@ -166,14 +166,14 @@ make generate-service SERVICE=my-app SHORT_PREFIX=ma SERVICE_CODE=20 PORT=8005
 ### 3.2 生成后的完整流程
 
 ```bash
-# 1. 生成
+# 1. 生成，注意不需要携带“-service”后缀，例如下面 my-app 最终生成出来的是 my-app-service
 make generate-service SERVICE=my-app SHORT_PREFIX=ma SERVICE_CODE=20 PORT=8005
 
 # 2. 进 venv 安装新 workspace 成员
 source .venv/bin/activate
 make install-service SERVICE=my-app-service    # 内部 uv sync --all-extras --all-packages
 
-# 3. 起本地 DB（若没起）
+# 3. 起本地 DB（可选，若没起）
 make compose-up
 
 # 4. 跑迁移（模板自带 alembic，会用 <prefix>_ 前缀过滤本服务的表）
@@ -203,6 +203,35 @@ curl http://localhost:8005/health
    service_settings = _settings.get_my_app_settings()
    cleaner = await my_app_setup(app, service_settings, logger, shared_resources=shared_resources)
    ```
+
+
+```python
+# all-in-one/src/all_in_one/services.py 的 services_registry()
+async def services_registry(app: FastAPI, _settings: Settings, logger: Logger):
+    try:
+        from xxx_service.main import setup as xxx_setup
+        service_settings = _settings.get_xxx_settings()
+        cleaner = await xxx_setup(app, service_settings, logger, shared_resources=shared_resources)
+        cleaner_list.append(cleaner)
+        _services_registry[service_settings.APP_NAME] = {"enabled": True}
+    except Exception as e:
+        logger.warning(f">>>>>>> Failed to load xxx-service exception: {e}")
+        logger.warning(f">>>>>>> Failed to load xxx-service stack: {traceback.format_exc()}")
+```
+
+```python
+# all-in-one/src/all_in_one/config.py 的 Settings 多继承 + 访问器
+class Settings(AllInOneSettings, ..., XxxxSettings):
+    def get_xxx_settings(self):
+        """获取 Xxx 服务配置"""
+        config_dict = vars(self).copy()
+        config_dict.update({
+            "MODEL": "all-in-one",
+            "APP_NAME": self.APP_NAME + "-xxx",
+            "REDIS_PREFIX": "xxx",
+        })
+        return XxxxSettings(**config_dict)
+```
 
 ---
 
@@ -292,7 +321,7 @@ clients ──▶（被 application 使用）
 |---|---|---|---|---|
 | **DTO** | api | pydantic BaseModel | 只在 api 层流动；请求/响应 | `PingResponse`、`PongRequest` |
 | **Entity** | domain | pydantic BaseModel（`from_attributes=True`） | domain ↔ application；Repository 接口的契约 | `Ping`、`Pong` |
-| **ORM Model** | infrastructure | `services_common.database.BaseModel` 子类 | 只在 infrastructure 内；不跨边界 | `PingModel`（表 `pipo_ping`） |
+| **ORM Model** | infrastructure | `services_common.database.BaseModel` 子类 | 只在 infrastructure 内；不跨边界 | `PIPOPingModel`（表 `pipo_ping`） |
 | **Client Schema** | clients | pydantic BaseModel | clients ↔ application；外部调用的入参/出参 | `UserInfo` |
 
 转换规则：
@@ -305,7 +334,7 @@ clients ──▶（被 application 使用）
 
 ```python
 # ❌ ORM Model 跨层
-async def get(self) ->PingModel: ...          # domain/application 里返回 ORM
+async def get(self) ->PIPOPingModel: ...          # domain/application 里返回 ORM
 
 # ❌ dict 当契约
 def get_user(self) -> dict: ...                # 裸 dict 跨边界
@@ -319,7 +348,7 @@ class Ping(Entity):
 
 ## 7. foundation：引导层
 
-`foundation/` 不是 DDD 层，是横切的引导代码，都是对 `services_common` 的薄封装。每个服务都有这五个文件：
+`foundation/` 不是 DDD 层，是横切的引导代码，都是基础实现。每个服务都有这五个文件：
 
 ### 7.1 `config.py` — 配置
 
@@ -532,8 +561,8 @@ app/infrastructure/
 from sqlalchemy import String, DateTime
 from services_common import BaseModel  # 共享声明基类
 
-class PingModel(BaseModel):
-    __tablename__ = "pipo_ping"     # ⚠️ 必须带 service_prefix 前缀！
+class PIPOPingModel(BaseModel):
+    __tablename__ = "pipo_ping"     # ⚠️ 必须带 service_prefix 前缀（全小写）！
 
     ping_id = Column(String, primary_key=True)
     message = Column(String, nullable=False)
@@ -542,8 +571,8 @@ class PingModel(BaseModel):
 
 ⚠️ **两条硬规则**（all-in-one 多服务共用一个 DB 时必须遵守）：
 
-1. **表名必须带前缀**：`{service_prefix}_{表}`（如 `pipo_ping`、`acc_user`）。否则多服务共用库会撞表。
-2. **ORM 类名也建议带前缀语义**：`{ServicePrefix}{表}Model`（如 `PipoPingModel`，生成器会把它替换成你的 `AgPingModel`）。
+1. **表名必须带前缀**：`{service_prefix}_{表}`（全小写，如 `pipo_ping`、`acc_user`）。否则多服务共用库会撞表。
+2. **ORM 类名必须带前缀**：`{SERVICE_PREFIX_UPPER}{表}Model`（**整体全大写前缀**，如 `PIPOPingModel`、`ACCUserModel`），与全小写表名前缀来自同一个 `service_prefix`、仅大小写不同。否则多服务共用同一 `DeclarativeBase` 会类名冲突。详见 `ai-coding-service-app.md` §5.4。
 
 ### 9.2 SQL Repository 实现
 
@@ -556,7 +585,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pingpong_service.app.domain.entities.ping import Ping
 from pingpong_service.app.domain.repositories.ping_repository import PingRepository
-from pingpong_service.app.infrastructure.persistence.models.ping_model import PingModel
+from pingpong_service.app.infrastructure.persistence.models.ping_model import PIPOPingModel
 from pingpong_service.foundation.logging import LogManager
 from services_common.logging import Logger
 
@@ -568,7 +597,7 @@ class SQLPingRepository(PingRepository):
 
     async def get_by_id(self, ping_id: str) -> Ping | None:
         async with self._dm.session() as session:
-            stmt = select(PingModel).where(PingModel.ping_id == ping_id)
+            stmt = select(PIPOPingModel).where(PIPOPingModel.ping_id == ping_id)
             model = (await session.execute(stmt)).scalar_one_or_none()
             return self._to_entity(model) if model else None
 
@@ -581,15 +610,15 @@ class SQLPingRepository(PingRepository):
             return self._to_entity(model)
 
     # ── ORM ↔ Entity 转换（私有方法）──
-    def _to_entity(self, model: PingModel) -> Ping:
+    def _to_entity(self, model: PIPOPingModel) -> Ping:
         return Ping(
             ping_id=model.ping_id,
             message=model.message,         # 值对象从 str 构造
             created_at=model.created_at,
         )
 
-    def _to_model(self, entity: Ping) -> PingModel:
-        return PingModel(
+    def _to_model(self, entity: Ping) -> PIPOPingModel:
+        return PIPOPingModel(
             ping_id=entity.ping_id,
             message=str(entity.message),
             created_at=entity.created_at,
@@ -908,18 +937,6 @@ async def setup(_app, _settings, logger, api_prefix="/api",
     set_injector(_injector)
     # 返回 cleaner 关闭资源
 ```
-
-### 解析一次请求的全链路
-
-`GET /api/v1/pingpong/ping`：
-
-1. FastAPI 路由到 `ping` 端点，参数 `query: PingQuery = Depends(get_ping_query)`。
-2. `get_ping_query()` 调 `get_injector().get(PingQuery)`。
-3. injector 解析 `PingQuery.__init__` 的 `@inject`，递归注入：`AsyncSession`、`Redis`、`PingRepository`（→ 按 InfrastructureModule 绑定为 `SQLPingRepository`，它又需要 `DatabaseManager`）、`LogManager`、`GithubOauthAPIClient`、`OtherServiceAPIProxy`。
-4. 端点调 `await query.execute()`，拿到 `PingQueryResult`。
-5. 组装 DTO，`success(...)` 返回 `DataResponse`。
-
-绑定都用 `scope=None`（transient，每次 `get` 新建实例，构造注入解析依赖图）。**新增任何依赖都要在对应层的 `modules.py` 注册**，否则 injector 解析不到。
 
 ---
 
@@ -1347,16 +1364,13 @@ else:
 6. **`deploy/scripts/migrate.sh`**：加一行 `run_migration "services/<service>" "<service>"`。
 7. **本服务的 `app/api/v1/router.py`** 必须用 `prefix="/v1/<service>"`，`setup` 必须接受 `shared_resources` 参数并实现 owns_* 逻辑（脚手架模板已具备）。
 
-### 18.8 All-in-One 的启动与部署
+### 18.8 All-in-One 的启动
 
 ```bash
 # 开发（热重载，默认 8002，可覆盖）
 make all-in-one
 make all-in-one ALL_IN_ONE_PORT=9000      # 换端口
 make all-in-one-watch                      # watchfiles 监听 services/ 与 all-in-one/src
-
-# 生产（gunicorn 4 uvicorn workers，端口 8000）
-make all-in-one-prod
 ```
 
 - dev 的 PYTHONPATH 显式拼 `services/common/src : services/pingpong-service/src : all-in-one/src`，其余服务靠 uv workspace editable install。
@@ -1475,7 +1489,7 @@ ruff：`line-length=100`、`target-version=py312`。mypy：`strict=true`。**提
 
 ## 22. 从开发到部署
 
-> ⚠️ 文档沉淀存在偏差：README 与 Makefile 提到 `infrastructure/docker-compose.yml`、`make deploy`、`infrastructure/kubernetes/`，但**仓库根实际没有 `infrastructure/` 目录**，也没有 `make deploy` 目标。实际部署资产在 `deploy/` 下。以 `deploy/` 为准。
+> 实际部署资产在 `deploy/` 下。以 `deploy/` 为准。
 
 ### 22.1 本地依赖
 
@@ -1558,7 +1572,7 @@ deploy/scripts/deploy-all-in-one.sh
 
 ## 24. 完整示例：实现一个 Article 资源
 
-把前面串起来，实现一个 `article` 资源（创建文章 / 查询文章），假设服务 `my-app-service`（prefix `ma`，code 20）。
+把前面串起来，实现一个 `article` 资源（创建文章 / 查询文章），假设服务 `my-app-service`（prefix `mapp`，code 20）。
 
 ### 步骤 1：domain
 
@@ -1607,8 +1621,8 @@ class BizCode(IntEnum):
 
 ```python
 # app/infrastructure/persistence/models/article_model.py
-class ArticleModel(BaseModel):
-    __tablename__ = "ag_article"
+class MAPPArticleModel(BaseModel):
+    __tablename__ = "mapp_article"
     article_id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
     body = Column(Text, nullable=False)
@@ -1623,7 +1637,7 @@ class SQLArticleRepository(ArticleRepository):
 
     async def get_by_id(self, article_id: str) -> Article | None:
         async with self._dm.session() as s:
-            m = (await s.execute(select(ArticleModel).where(...))).scalar_one_or_none()
+            m = (await s.execute(select(MAPPArticleModel).where(...))).scalar_one_or_none()
             return self._to_entity(m) if m else None
 
     async def create(self, article: Article) -> Article:
@@ -1633,7 +1647,7 @@ class SQLArticleRepository(ArticleRepository):
             return self._to_entity(m)
 
     def _to_entity(self, m): return Article(article_id=m.article_id, title=m.title, body=m.body, created_at=m.created_at)
-    def _to_model(self, e): return ArticleModel(article_id=e.article_id, title=str(e.title), body=e.body, created_at=e.created_at)
+    def _to_model(self, e): return MAPPArticleModel(article_id=e.article_id, title=str(e.title), body=e.body, created_at=e.created_at)
 
 # app/infrastructure/modules.py — 加绑定
 binder.bind(ArticleRepository, to=SQLArticleRepository, scope=None)
