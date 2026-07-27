@@ -12,9 +12,9 @@ class PingModel(BaseModel):
     """SQLAlchemy Ping 模型"""
     __tablename__ = "pipo_ping"
     
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    ping_id: Mapped[str] = mapped_column(String(36), nullable=False, comment="业务ID")
     message: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    
+
     def __repr__(self) -> str:
         return f"<Ping(id={self.id}, message={self.message})>"

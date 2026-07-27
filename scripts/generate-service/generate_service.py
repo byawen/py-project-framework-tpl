@@ -354,18 +354,18 @@ def backup_and_update_root_pyproject(service_name: str) -> None:
             print(f"警告: 未找到 [tool.uv.workspace].members 配置")
     
     # 更新 [tool.uv.sources]
-    source_entry = f'{kebab_name}-service = {{ workspace = true, editable = true }}'
+    source_entry = f'{kebab_name}-service = {{ workspace = true }}'
     if source_entry not in content:
         # 在 [tool.uv.sources] 后添加
         if '[tool.uv.sources]' in content:
             content = content.replace(
                 '[tool.uv.sources]',
-                f'[tool.uv.sources]\n{kebab_name}-service = {{ workspace = true, editable = true }}'
+                f'[tool.uv.sources]\n{kebab_name}-service = {{ workspace = true }}'
             )
             print(f"已更新 [tool.uv.sources]: {source_entry}")
         else:
             # 如果没有 sources 部分，添加到文件末尾
-            content += f"\n[tool.uv.sources]\n{kebab_name}-service = {{ workspace = true, editable = true }}\n"
+            content += f"\n[tool.uv.sources]\n{kebab_name}-service = {{ workspace = true }}\n"
             print(f"已创建 [tool.uv.sources]: {source_entry}")
     
     # 写回文件
@@ -442,7 +442,7 @@ def main():
     print(f"  1. 前置检查: 确保根目录 pyproject.toml 文件，【当删除服务时请手动反向操作去除】")
     print(f"            在 [tool.uv.workspace].dependencies 中存在 \"{service_name.lower()}-service\"; ")
     print(f"            在 [tool.uv.workspace].members 中存在 \"services/{service_name.lower()}-service \"; ")
-    print(f"            在 [tool.uv.sources] 中存在 {service_name.lower()}-service =" + " { workspace = true, editable = true } .")
+    print(f"            在 [tool.uv.sources] 中存在 {service_name.lower()}-service =" + " { workspace = true } .")
     print(f"  2. 进入venv: source .venv/bin/activate")
     print(f"  3. 安装依赖: make install-service SERVICE={service_name.lower()}-service")
     print(f"  4. 启动开发: make dev SERVICE={service_name.lower()}-service")

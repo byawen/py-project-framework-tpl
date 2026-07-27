@@ -4,7 +4,9 @@
 """
 from typing import Optional
 from dataclasses import dataclass
-import uuid
+
+from pingpong_service.app.application.common.exception import RegistrationFailedException
+from services_common.utils import generate_id
 from injector import inject
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,26 +49,31 @@ class PingQuery:
 
     async def execute(self) -> PingQueryResult:
         """执行 Ping 查询 - 返回 'ping, xxxxxx'"""
-        self.logger.debug("Executing Ping query")
+        self.logger.info("执行 Ping 查询", operation="pingpong.ping.query.start")
         
         # 生成一个唯一的 ID
-        ping_id = str(uuid.uuid4())
+        ping_id = generate_id()
 
         # 请求外部服务：如github
         result = await self.github_client.oauth_request()
 
         # 请求外部服务：other service
         result2 = await self.other_service.get_user_by_id("awen")
-        
+
         # 创建 Ping 实体
         ping = Ping(
-            id=ping_id,
+            ping_id=ping_id,
             message="ping, " + str(result) + " - " + str(result2),
         )
         
         # 从数据库中获取
         # await self.ping_repo.get_by_id(ping)
         
+        self.logger.info(
+            "执行 Ping 查询完成",
+            operation="pingpong.ping.query.success",
+            ping_id=ping_id,
+        )
         return PingQueryResult(
             message=str(ping),
             ping=ping,

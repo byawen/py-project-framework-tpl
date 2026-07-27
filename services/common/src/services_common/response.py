@@ -60,11 +60,21 @@ class ResponseCode:
 
 
 class BaseResponse(BaseModel):
-    """基础响应模型"""
+    """基础响应模型
+    
+    字段说明:
+        api_version: API 版本标识
+        result: 响应结果类型（success / error.xxx）
+        code: HTTP 状态码（200/400/500 等，反映传输层语义）
+        biz_code: 业务码（8位整数，精确定位服务+业务场景，成功响应也携带）
+        message: 人类可读的响应消息
+        timestamp: 响应时间戳
+    """
     
     api_version: str = Field(default=DEFAULT_API_VERSION, description="API 版本")
     result: ResponseResult = Field(default=ResponseResult.SUCCESS, description="响应结果标识")
-    code: int = Field(default=ResponseCode.SUCCESS, description="响应状态码")
+    code: int = Field(default=ResponseCode.SUCCESS, description="HTTP 状态码")
+    biz_code: int = Field(default=0, description="业务码（8位整数，定位服务+业务场景）")
     message: str = Field(default="Success", description="响应消息")
     timestamp: datetime = Field(default_factory=datetime.now, description="响应时间戳")
     
@@ -74,6 +84,7 @@ class BaseResponse(BaseModel):
                 "api_version": "v1",
                 "result": "success",
                 "code": 200,
+                "biz_code": 0,
                 "message": "Success",
                 "timestamp": "2024-01-01T00:00:00Z"
             }
@@ -147,7 +158,8 @@ class PageResponse(BaseResponse, Generic[T]):
 class ErrorResponse(BaseResponse):
     """错误响应模型"""
     
-    code: int = Field(default=ResponseCode.INTERNAL_SERVER_ERROR, description="错误状态码")
+    code: int = Field(default=ResponseCode.INTERNAL_SERVER_ERROR, description="HTTP 错误状态码")
+    biz_code: int = Field(default=0, description="业务码（8位整数，定位服务+业务场景）")
     result: ResponseResult = Field(default=ResponseResult.INTERNAL_ERROR, description="响应结果标识")
     message: str = Field(default="Internal Server Error", description="错误消息")
     detail: Optional[Any] = Field(default=None, description="详细错误信息")
@@ -159,6 +171,7 @@ class ErrorResponse(BaseResponse):
                 "api_version": "v1",
                 "result": "error.internal",
                 "code": 500,
+                "biz_code": 99000000,
                 "message": "Internal Server Error",
                 "timestamp": "2024-01-01T00:00:00Z",
                 "detail": "Database connection failed",
@@ -171,13 +184,19 @@ class ErrorResponse(BaseResponse):
 # 响应构建函数
 # ============================================================
 
-def success(data: Any = None, message: str = "Success", result: ResponseResult = ResponseResult.SUCCESS) -> DataResponse:
+def success(
+    data: Any = None,
+    message: str = "Success",
+    result: ResponseResult = ResponseResult.SUCCESS,
+    biz_code: int = 0,
+) -> DataResponse:
     """构建成功响应
     
     Args:
         data: 响应数据
         message: 响应消息
         result: 响应结果标识
+        biz_code: 业务码（默认 0 表示通用成功，可传入服务特定的成功码）
         
     Returns:
         DataResponse 实例
@@ -186,18 +205,25 @@ def success(data: Any = None, message: str = "Success", result: ResponseResult =
         api_version=DEFAULT_API_VERSION,
         result=result,
         code=ResponseCode.SUCCESS,
+        biz_code=biz_code,
         message=message,
         data=data,
     )
 
 
-def created(data: Any = None, message: str = "Created successfully", result: ResponseResult = ResponseResult.CREATED) -> DataResponse:
+def created(
+    data: Any = None,
+    message: str = "Created successfully",
+    result: ResponseResult = ResponseResult.CREATED,
+    biz_code: int = 0,
+) -> DataResponse:
     """构建创建成功响应
     
     Args:
         data: 响应数据
         message: 响应消息
         result: 响应结果标识
+        biz_code: 业务码
         
     Returns:
         DataResponse 实例
@@ -206,12 +232,19 @@ def created(data: Any = None, message: str = "Created successfully", result: Res
         api_version=DEFAULT_API_VERSION,
         result=result,
         code=ResponseCode.CREATED,
+        biz_code=biz_code,
         message=message,
         data=data,
     )
 
 
-def list_response(data: List[Any], total: int = 0, message: str = "Success", result: ResponseResult = ResponseResult.SUCCESS) -> ListResponse:
+def list_response(
+    data: List[Any],
+    total: int = 0,
+    message: str = "Success",
+    result: ResponseResult = ResponseResult.SUCCESS,
+    biz_code: int = 0,
+) -> ListResponse:
     """构建列表响应
     
     Args:
@@ -219,6 +252,7 @@ def list_response(data: List[Any], total: int = 0, message: str = "Success", res
         total: 总数量
         message: 响应消息
         result: 响应结果标识
+        biz_code: 业务码
         
     Returns:
         ListResponse 实例
@@ -227,6 +261,7 @@ def list_response(data: List[Any], total: int = 0, message: str = "Success", res
         api_version=DEFAULT_API_VERSION,
         result=result,
         code=ResponseCode.SUCCESS,
+        biz_code=biz_code,
         message=message,
         data=data,
         total=total,
@@ -240,6 +275,7 @@ def page_response(
     total: int = 0,
     message: str = "Success",
     result: ResponseResult = ResponseResult.SUCCESS,
+    biz_code: int = 0,
 ) -> PageResponse:
     """构建分页响应
     
@@ -250,6 +286,7 @@ def page_response(
         total: 总数量
         message: 响应消息
         result: 响应结果标识
+        biz_code: 业务码
         
     Returns:
         PageResponse 实例
@@ -260,6 +297,7 @@ def page_response(
         api_version=DEFAULT_API_VERSION,
         result=result,
         code=ResponseCode.SUCCESS,
+        biz_code=biz_code,
         message=message,
         data=data,
         page=page,
@@ -275,15 +313,17 @@ def error(
     detail: Any = None,
     trace_id: Optional[str] = None,
     result: ResponseResult = ResponseResult.INTERNAL_ERROR,
+    biz_code: int = 0,
 ) -> ErrorResponse:
     """构建错误响应
     
     Args:
         message: 错误消息
-        code: 错误状态码
+        code: HTTP 错误状态码
         detail: 详细错误信息
         trace_id: 请求追踪ID
         result: 响应结果标识
+        biz_code: 业务码（精确定位服务+业务场景）
         
     Returns:
         ErrorResponse 实例
@@ -292,32 +332,63 @@ def error(
         api_version=DEFAULT_API_VERSION,
         result=result,
         code=code,
+        biz_code=biz_code,
         message=message,
         detail=detail,
         trace_id=trace_id,
     )
 
 
-def bad_request(message: str = "Bad Request", detail: Any = None) -> ErrorResponse:
-    """构建 400 错误响应"""
-    return error(message=message, code=ResponseCode.BAD_REQUEST, detail=detail, result=ResponseResult.BAD_REQUEST)
+def bad_request(message: str = "Bad Request", detail: Any = None, biz_code: int = 0) -> ErrorResponse:
+    """构建 400 错误响应 - 请求参数格式错误或缺失"""
+    return error(
+        message=message,
+        code=ResponseCode.BAD_REQUEST,
+        detail=detail,
+        result=ResponseResult.BAD_REQUEST,
+        biz_code=biz_code,
+    )
 
 
-def unauthorized(message: str = "Unauthorized", detail: Any = None) -> ErrorResponse:
-    """构建 401 错误响应"""
-    return error(message=message, code=ResponseCode.UNAUTHORIZED, detail=detail, result=ResponseResult.UNAUTHORIZED)
+def unauthorized(message: str = "Unauthorized", detail: Any = None, biz_code: int = 0) -> ErrorResponse:
+    """构建 401 错误响应 - 未登录或认证信息缺失"""
+    return error(
+        message=message,
+        code=ResponseCode.UNAUTHORIZED,
+        detail=detail,
+        result=ResponseResult.UNAUTHORIZED,
+        biz_code=biz_code,
+    )
 
 
-def forbidden(message: str = "Forbidden", detail: Any = None) -> ErrorResponse:
-    """构建 403 错误响应"""
-    return error(message=message, code=ResponseCode.FORBIDDEN, detail=detail, result=ResponseResult.FORBIDDEN)
+def forbidden(message: str = "Forbidden", detail: Any = None, biz_code: int = 0) -> ErrorResponse:
+    """构建 403 错误响应 - 已认证但无权限访问该资源"""
+    return error(
+        message=message,
+        code=ResponseCode.FORBIDDEN,
+        detail=detail,
+        result=ResponseResult.FORBIDDEN,
+        biz_code=biz_code,
+    )
 
 
-def not_found(message: str = "Not Found", detail: Any = None) -> ErrorResponse:
-    """构建 404 错误响应"""
-    return error(message=message, code=ResponseCode.NOT_FOUND, detail=detail, result=ResponseResult.NOT_FOUND)
+def not_found(message: str = "Not Found", detail: Any = None, biz_code: int = 0) -> ErrorResponse:
+    """构建 404 错误响应 - 请求的资源不存在"""
+    return error(
+        message=message,
+        code=ResponseCode.NOT_FOUND,
+        detail=detail,
+        result=ResponseResult.NOT_FOUND,
+        biz_code=biz_code,
+    )
 
 
-def conflict(message: str = "Conflict", detail: Any = None) -> ErrorResponse:
-    """构建 409 错误响应"""
-    return error(message=message, code=ResponseCode.CONFLICT, detail=detail, result=ResponseResult.CONFLICT)
+def conflict(message: str = "Conflict", detail: Any = None, biz_code: int = 0) -> ErrorResponse:
+    """构建 409 错误响应 - 资源冲突（重复创建、状态冲突）"""
+    return error(
+        message=message,
+        code=ResponseCode.CONFLICT,
+        detail=detail,
+        result=ResponseResult.CONFLICT,
+        biz_code=biz_code,
+    )

@@ -3,69 +3,67 @@
 JWT Token 生成和验证
 """
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Dict, Optional
 
 import jwt
 from fastapi import Header, HTTPException, status
+from jose import JWTError
 
+from services_common import logging
 from services_common.exceptions import InvalidTokenException, TokenExpiredException
 
 
-def generate_token(account_id: str, expires_days: int = 30, secret_key: str = "secret-key") -> tuple[str, int]:
-    """生成 JWT Token
+######################
 
-    Args:
-        account_id: 账号 ID
-        expires_days: 过期天数，默认30天
+def create_token(data: Dict[str, Any], expires_minute: int = 30, secret_key: str = "secret-key", algorithm: str = "HS256") -> str:
+    """创建 JWT Token"""
+    to_encode = data.copy()
+    expire = datetime.now() + timedelta(minutes=expires_minute)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, secret_key, algorithm=algorithm)
 
-    Returns:
-        tuple: (token字符串, 过期时间戳)
-    """
-    expire_at = int((datetime.now() + timedelta(days=expires_days)).timestamp())
-    payload = {
-        "sub": account_id,
-        "iss": "llmops",
-        "exp": expire_at,
-    }
-    token = jwt.encode(payload, secret_key, algorithm="HS256")
-    return token, expire_at
-
-
-def parse_token(token: str, secret_key: str = "secret-key") -> dict[str, Any]:
-    """解析 JWT Token
-
-    Args:
-        token: JWT Token 字符串
-        secret_key: 密钥
-
-    Returns:
-        dict: Token 载荷
-
-    Raises:
-        InvalidTokenException: Token 无效
-        TokenExpiredException: Token 已过期
-    """
+def decode_token(token: str, secret_key: str = "secret-key", algorithm: str = "HS256") -> dict[str, Any]:
+    """解析 JWT Token"""
     try:
-        return jwt.decode(token, secret_key, algorithms=["HS256"])
+        return jwt.decode(token, secret_key, algorithm=algorithm)
     except jwt.ExpiredSignatureError:
         raise TokenExpiredException()
     except jwt.InvalidTokenError:
         raise InvalidTokenException()
 
 
-async def parse_token_account_id(authorization: str, secret_key: str = "secret-key") -> str:
-    """解析 Token 并返回账号 ID
+######################### 以下为通用组 #########################
+# 目前授权通用放在 common-service 中，后期再扩展 auth-service 和 gateway api 网关服务
 
-    Args:
-        authorization: Authorization header
-        secret_key: 密钥
+def generate_token(account_id: str, expires_minute: int = 30, token_type: str = "access", secret_key: str = "secret-key", algorithm: str = "HS256") -> tuple[str, int]:
+    """生成 JWT Token"""
+    expire_at = int((datetime.now() + timedelta(minutes=expires_minute)).timestamp())
+    payload = {
+        "sub": account_id,
+        "iss": "01",
+        "type": token_type,
+        "exp": expire_at,
+    }
+    token = jwt.encode(payload, secret_key, algorithm=algorithm)
+    return token, expire_at
 
-    Returns:
-        str: 账号 ID
 
-    Raises:
-        HTTPException: 未授权或 token 无效
-    """
+def parse_token(token: str, token_type: str = "access", secret_key: str = "secret-key", algorithm: str = "HS256") -> Any:
+    """解析 JWT Token"""
+    try:
+        payload = jwt.decode(token, secret_key, algorithms=[algorithm])
+        type = payload.get("type")
+        if token_type == type:
+            return payload
+        raise InvalidTokenException()
+    except jwt.ExpiredSignatureError:
+        raise TokenExpiredException()
+    except jwt.InvalidTokenError:
+        raise InvalidTokenException()
+
+
+async def parse_token_account_id(authorization: str, token_type: str = "access", secret_key: str = "secret-key", algorithm: str = "HS256") -> str:
+    """解析 Token 并返回账号 ID"""
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -80,7 +78,7 @@ async def parse_token_account_id(authorization: str, secret_key: str = "secret-k
 
     try:
         # 解析 token
-        payload = parse_token(token, secret_key)
+        payload = parse_token(token, token_type, secret_key, algorithm)
         account_id = payload.get("sub")
         if not account_id:
             raise HTTPException(
@@ -103,3 +101,25 @@ async def parse_token_account_id(authorization: str, secret_key: str = "secret-k
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="无效的 token 格式",
         )
+
+
+async def try_parse_token_account_id(authorization: str, token_type: str = "access", secret_key: str = "secret-key", algorithm: str = "HS256") -> str:
+    """尝试解析 Token 并返回账号 ID"""
+    if not authorization:
+        return ""
+
+    # 移除 "Bearer " 前缀
+    if authorization.startswith("Bearer "):
+        token = authorization[7:]
+    else:
+        token = authorization
+
+    try:
+        # 解析 token
+        payload = parse_token(token, token_type, secret_key, algorithm)
+        account_id = payload.get("sub")
+        if not account_id:
+            return ""
+        return account_id
+    except Exception:
+        return ""

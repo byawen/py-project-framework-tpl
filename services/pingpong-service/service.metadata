@@ -1,4 +1,5 @@
 {
     "service_name": "pingpong",
-    "service_prefix": "pipo"
+    "service_prefix": "pipo",
+    "service_code": 0
 }

@@ -1,75 +1,156 @@
-import uuid
-import logging
+"""RequestID 中间件 - 为每个请求注入 request_id 并记录请求/响应日志
+
+纯 ASGI 实现，不依赖 BaseHTTPMiddleware，消除 cancel scope 对 SQLAlchemy
+异步连接池的影响，同时正确支持 SSE / StreamingResponse。
+"""
+
+from __future__ import annotations
+
 import time
-from contextvars import ContextVar
-from typing import Callable
-from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
+from typing import Any, Callable
 
-logger = logging.getLogger(__name__)
+from services_common._context import request_id_context
+from services_common.logging import get_logger
+from services_common.utils.id import generate_id
 
-# 用于在线程/异步任务中传递 request_id
-request_id_context: ContextVar[str] = ContextVar("request_id", default="")
+logger = get_logger(__name__)
 
 
-class RequestIDMiddleware(BaseHTTPMiddleware):
-    """为每个请求添加请求ID并记录请求/响应的中间件"""
+class RequestIDMiddleware:
+    """为每个请求添加 request_id 并记录请求/响应日志（纯 ASGI 实现）"""
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        request_id = request.headers.get("X-Request-ID")
-        if not request_id:
-            request_id = str(uuid.uuid4())
+    def __init__(self, app: Any) -> None:
+        self.app = app
 
-        # 设置到 contextvars，供整个链路使用
+    async def __call__(
+        self, scope: dict[str, Any], receive: Callable, send: Callable
+    ) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # 从请求头提取或生成 request_id
+        headers: dict[bytes, bytes] = dict(scope.get("headers", []))
+        request_id = headers.get(b"x-request-id", b"").decode() or generate_id()
+
+        # 设置 ContextVar
         token = request_id_context.set(request_id)
-        request.state.request_id = request_id
 
-        # 记录传入的请求
+        # 写入 scope["state"] 以便下游 request.state.request_id 可用
+        if "state" not in scope:
+            scope["state"] = {}
+        scope["state"]["request_id"] = request_id
+
+        # 读取请求体用于日志（仅 JSON，与原实现一致）
+        content_type = headers.get(b"content-type", b"").decode().lower()
+        log_body: bytes | None = None
+        downstream_receive = receive
+
+        if "application/json" in content_type:
+            log_body, downstream_receive = await self._tee_body(receive)
+
         start_time = time.time()
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+        client = scope.get("client")
+        client_host = client[0] if client else "unknown"
+
         logger.info(
-            f"--> {request.method} {request.url.path} "
-            f"[request_id={request_id}] "
-            f"client={request.client.host if request.client else 'unknown'}"
+            f"---> {method} {path}",
+            operation="http.request.request-id",
+            request_id=request_id,
+            client=client_host,
+            body=log_body,
         )
 
-        response = None
+        # 拦截 send：注入 X-Request-ID 响应头 + 采集非流式响应体用于日志
+        status_code: int | None = None
+        saw_more_body = False
+        res_body: bytes | None = None
+
+        async def send_wrapper(message: dict[str, Any]) -> None:
+            nonlocal status_code, saw_more_body, res_body
+
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                hdrs = list(message.get("headers", []))
+                hdrs.append((b"x-request-id", request_id.encode()))
+                message["headers"] = hdrs
+
+            elif message["type"] == "http.response.body":
+                if message.get("more_body", False):
+                    saw_more_body = True
+                elif not saw_more_body:
+                    body = message.get("body", b"")
+                    if body and len(body) <= 4096:
+                        res_body = body
+            await send(message)
+
         try:
-            response = await call_next(request)
+            await self.app(scope, downstream_receive, send_wrapper)
         except Exception:
-            # 异常时记录错误日志
             process_time = time.time() - start_time
             logger.error(
-                f"<-- {request.method} {request.url.path} "
-                f"[request_id={request_id}] "
-                f"status=500 "
-                f"duration={process_time:.3f}s "
-                f"error=exception"
+                f"<--- {method} {path}",
+                operation="http.request.request-id.start",
+                request_id=request_id,
+                status=500,
+                duration=round(process_time, 3),
+                error="exception",
             )
             raise
         finally:
-            # 清理 contextvars
             request_id_context.reset(token)
 
-        # 记录传出的响应
+        # 响应体日志（仅非流式响应）
+        # res_body 赋值时已限制 <= 4096，无需二次截断
         process_time = time.time() - start_time
         logger.info(
-            f"<-- {request.method} {request.url.path} "
-            f"[request_id={request_id}] "
-            f"status={response.status_code} "
-            f"duration={process_time:.3f}s"
+            f"<--- {method} {path}",
+            operation="http.request.request-id.finish",
+            request_id=request_id,
+            status=status_code,
+            duration=round(process_time, 3),
+            body=res_body,
         )
 
-        response.headers["X-Request-ID"] = request_id
+    @staticmethod
+    async def _tee_body(receive: Callable) -> tuple[bytes | None, Callable]:
+        """消费 receive 读取完整请求体，返回 (日志体, 可回放的 receive)。
 
-        return response
+        日志体超过 4KB 时截断为首 1KB + 尾 1KB，与原实现一致。
+        回放 receive 在缓冲消息耗尽后回退到原始 receive（用于 http.disconnect）。
+        """
+        chunks: list[bytes] = []
+        messages: list[dict[str, Any]] = []
+        more = True
 
+        while more:
+            msg = await receive()
+            if msg["type"] == "http.disconnect":
+                messages.append(msg)
+                break
+            messages.append(msg)
+            chunk = msg.get("body", b"")
+            if chunk:
+                chunks.append(chunk)
+            more = msg.get("more_body", False)
 
-def get_request_id() -> str:
-    """获取当前请求的 request_id
-    
-    用于在业务代码中获取当前请求的 request_id
-    
-    Returns:
-        request_id 字符串，如果不在请求上下文中则返回空字符串
-    """
-    return request_id_context.get()
+        full = b"".join(chunks)
+        log_body: bytes | None = None
+        if full:
+            log_body = (
+                full[:1024] + b" ... " + full[-1024:]
+                if len(full) > 4096
+                else full
+            )
+
+        it = iter(messages)
+
+        async def replay() -> dict[str, Any]:
+            try:
+                return next(it)
+            except StopIteration:
+                return await receive()
+
+        return log_body, replay

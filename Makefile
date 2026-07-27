@@ -52,6 +52,14 @@ help:
 	@echo "  $(YELLOW)all-in-one-prod$(NC)       Start All-in-One mode (production)"
 	@echo "  $(YELLOW)all-in-one-install$(NC)    Install All-in-One dependencies"
 	@echo ""
+	@echo "$(GREEN)Worker-in-One Targets:$(NC)"
+	@echo "  $(YELLOW)worker-in-one$(NC)         Start Worker-in-One mode (development)"
+	@echo "  $(YELLOW)worker-in-one-install$(NC) Install Worker-in-One dependencies"
+	@echo ""
+	@echo "$(GREEN)Code Generation:$(NC)"
+	@echo "  $(YELLOW)generate-service$(NC)      Generate a new service (API + port)"
+	@echo "  $(YELLOW)generate-worker$(NC)       Generate a new worker (no API, no port)"
+	@echo ""
 	@echo "$(GREEN)Examples:$(NC)"
 	@echo "  make dev SERVICE=pingpong-service"
 	@echo "  make migrate-service SERVICE=pingpong-service"
@@ -59,6 +67,8 @@ help:
 	@echo "  make test-service SERVICE=pingpong-service"
 	@echo "  make add-service SERVICE=pingpong-service"
 	@echo "  make remove-service SERVICE=pingpong-service"
+	@echo "  make generate-service SERVICE=new-app SHORT_PREFIX=na PORT=8001"
+	@echo "  make generate-worker WORKER=new-app SHORT_PREFIX=na"
 	@echo ""
 	@echo "$(GREEN)Available Services:$(NC)"
 	@for service in $(GET_SERVICES); do \
@@ -196,7 +206,7 @@ ifndef NAME
 	@echo "$(RED)Error: NAME is required. Usage: make migration-create SERVICE=pingpong-service NAME=add_user_field$(NC)"
 	@exit 1
 endif
-	$(MAKE) -C services/$(SERVICE) migration-create NAME=$(NAME)
+	$(MAKE) -C services/$(SERVICE) migration-create NAME="$(NAME)"
 
 .PHONY: dev
 dev:
@@ -233,16 +243,16 @@ PINGPONG_SRC := $(PWD)/services/pingpong-service/src
 .PHONY: all-in-one
 all-in-one:
 	@echo "$(GREEN)Starting All-in-One mode...$(NC)"
-	@cd all-in-one && PYTHONPATH="$(COMMON_SRC):$(PINGPONG_SRC):$(PWD)/all-in-one/src:$$PYTHONPATH" uvicorn src.all_in_one.main:app \
+	@cd all-in-one && PYTHONPATH="$(COMMON_SRC):$(PINGPONG_SRC):$(PWD)/all-in-one/src:$$PYTHONPATH" uv run uvicorn src.all_in_one.main:app \
 		--reload \
 		--reload-dir ../services/ \
 		--reload-dir ../all-in-one/src \
-		--port 8000 --host 0.0.0.0
+		--port 8002 --host 0.0.0.0
 
 .PHONY: all-in-one-prod
 all-in-one-prod:
 	@echo "$(GREEN)Starting All-in-One mode (production)...$(NC)"
-	@cd all-in-one && PYTHONPATH="$(COMMON_SRC):$(PINGPONG_SRC):$(PWD)/all-in-one/src:$$PYTHONPATH" gunicorn src.all_in_one.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+	@cd all-in-one && PYTHONPATH="$(COMMON_SRC):$(PINGPONG_SRC):$(PWD)/all-in-one/src:$$PYTHONPATH" uv run gunicorn src.all_in_one.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
 
 .PHONY: all-in-one-install
 all-in-one-install:
@@ -258,6 +268,20 @@ all-in-one-add:
 all-in-one-remove:
 	@echo "$(GREEN)Removing all-in-one from workspace...$(NC)"
 	@echo "$(YELLOW)all-in-one is a workspace member, please remove it manually from pyproject.toml [tool.uv.workspace.members]$(NC)"
+
+# ============================================================
+# Worker-in-One 模式 (使用 workers 下的 worker 模块)
+# ============================================================
+
+.PHONY: worker-in-one
+worker-in-one:
+	@echo "$(GREEN)Starting Worker-in-One mode...$(NC)"
+	@cd worker-in-one && PYTHONPATH="$(COMMON_SRC):$(PINGPONG_SRC):$(PWD)/workers/pingpong-worker/src:$(PWD)/worker-in-one/src:$$PYTHONPATH" uv run python -m worker_in_one.main
+
+.PHONY: worker-in-one-install
+worker-in-one-install:
+	@echo "$(GREEN)Installing Worker-in-One dependencies...$(NC)"
+	@cd worker-in-one && uv sync --frozen
 
 # ============================================================
 # Docker Compose
@@ -327,6 +351,19 @@ ifndef PORT
 else
 	@python3 scripts/generate-service/generate_service.py $(SERVICE) $(SHORT_PREFIX) $(PORT)
 endif
+
+.PHONY: generate-worker
+generate-worker:
+ifndef WORKER
+	@echo "$(RED)Error: WORKER is required. Usage: make generate-worker WORKER=new-app SHORT_PREFIX=na$(NC)"
+	@exit 1
+endif
+ifndef SHORT_PREFIX
+	@echo "$(RED)Error: SHORT_PREFIX is required. Usage: make generate-worker WORKER=new-app SHORT_PREFIX=na$(NC)"
+	@exit 1
+endif
+	@echo "$(GREEN)Generating new worker: $(WORKER) with prefix $(SHORT_PREFIX)$(NC)"
+	@python3 scripts/generate-service/generate_worker.py $(WORKER) $(SHORT_PREFIX)
 
 # ============================================================
 # 健康检查

@@ -10,6 +10,9 @@ class ApplicationModule(Module):
         from pingpong_service.app.application.queries import PingQuery
         binder.bind(PingQuery, to=PingQuery, scope=None)
 
+        from pingpong_service.app.application.queries import BizCodeTestQuery
+        binder.bind(BizCodeTestQuery, to=BizCodeTestQuery, scope=None)
+
         # Service
         from pingpong_service.app.application.services.pp_service import PPService
         binder.bind(PPService, to=PPService, scope=None)

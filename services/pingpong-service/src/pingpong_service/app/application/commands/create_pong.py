@@ -29,7 +29,12 @@ class PongCommand:
     
     async def execute(self, data: str) -> PongCommandResult:
         """执行创建 Pong 命令"""
-        logger.info(f"Creating pong with data: {data}")
+        logger.info(
+            "创建 pong 开始",
+            operation="pingpong.pong.create.start",
+            input_data=data,
+            input_length=len(data),
+        )
         
         # 创建 PongData 值对象
         pong_data = PongData(data)
@@ -40,7 +45,13 @@ class PongCommand:
         # 保存到仓储
         saved_pong = await self.pong_repository.save(pong)
         
-        logger.info(f"Pong created with id: {saved_pong.id}")
+        logger.info(
+            "创建 pong 成功",
+            operation="pingpong.pong.create.success",
+            input_data=data,
+            pong_id=saved_pong.pong_id,
+            result_data=str(saved_pong.data),
+        )
         
         return PongCommandResult(
             data=data,

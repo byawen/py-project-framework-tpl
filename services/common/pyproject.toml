@@ -11,7 +11,9 @@ dependencies = [
     "pydantic-settings>=2.7.0",
     "sqlalchemy>=2.0.0",
     "asyncpg>=0.30.0",
+    "greenlet>=3.0.0",
     "redis>=5.2.0",
+    "pyjwt>=2.8.0",
     "python-jose[cryptography]>=3.3.0",
     "bcrypt>=4.2.0",
     "structlog>=24.0.0",
@@ -19,6 +21,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+broker = [
+    "celery>=5.4.0",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.25.0",

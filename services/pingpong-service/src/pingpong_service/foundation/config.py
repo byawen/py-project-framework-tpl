@@ -1,11 +1,18 @@
 """PingPong 服务的配置管理模块"""
 from functools import lru_cache
-
+from pydantic_settings import SettingsConfigDict
 from services_common.config import AppSettings, DatabaseSettings, RedisSettings
 
 
 class Settings(AppSettings, DatabaseSettings, RedisSettings):
     """PingPong 服务配置 - 继承公共配置"""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="allow",
+    )
 
     # 覆盖默认端口
     PORT: int = 8001

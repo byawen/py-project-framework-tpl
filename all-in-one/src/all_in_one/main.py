@@ -14,11 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from all_in_one.foundation.exception_handlers import register_exception_handlers
 from all_in_one.services import services_registry
+from services_common.logging import Logger, configure_logging, shutdown_file_logging
 from services_common import configure_uvicorn_logging
 from services_common.database import DatabaseManager
 from services_common.redis import RedisManager
-from services_common.middleware import RequestIDMiddleware, ErrorHandlingMiddleware
-from services_common.logging import Logger
+from services_common.middleware import RequestIDMiddleware, ErrorHandlingMiddleware, LoggingMiddleware
 
 from all_in_one.foundation.container import set_injector
 from all_in_one.config import Settings, get_settings
@@ -29,6 +29,8 @@ _services_registry = {}
 
 async def setup(app: FastAPI, _settings: Settings, logger: Logger):
     """初始化"""
+    global _services_registry
+
     if not logger:
         logger = get_logger(__name__)
 
@@ -42,14 +44,26 @@ async def setup(app: FastAPI, _settings: Settings, logger: Logger):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期 - 启动和关闭"""
-    logger = get_logger(__name__)
-    logger.info("Starting Services- All-in-One Mode...")
-    
-    # 配置 JSON 日志
-    configure_uvicorn_logging()
 
     # 初始化配置
     _settings: Settings = app.state.settings
+
+    # 最先初始化日志（含文件写入器），之后所有日志都能落盘
+    configure_logging(
+        service_name=_settings.APP_NAME,
+        log_dir=_settings.LOG_DIR,
+        log_level=_settings.LOG_LEVEL,
+        log_console=_settings.LOG_CONSOLE,
+        log_file=_settings.LOG_FILE,
+        log_file_max_bytes=_settings.LOG_FILE_MAX_BYTES,
+        log_file_backup_count=_settings.LOG_FILE_BACKUP_COUNT,
+    )
+
+    logger = get_logger(__name__)
+    logger.info(f"Starting Services - All-in-One Mode with APP_NAME={_settings.APP_NAME}, LOG_LEVEL={_settings.LOG_LEVEL}...")
+
+    # 配置 JSON 日志
+    configure_uvicorn_logging()
     
     # 使用 DatabaseManager 管理数据库连接
     _db_manager = DatabaseManager(
@@ -106,21 +120,26 @@ async def lifespan(app: FastAPI):
     if cleaner:
         await cleaner()
 
+    shutdown_file_logging()
+
 
 def create_app(_settings: Settings = None) -> FastAPI:
     """创建并配置 FastAPI 应用"""
     if _settings is None:
         _settings = get_settings()
 
+    docs_url = "/docs" if _settings.DEBUG else None
+    redoc_url = "/redoc" if _settings.DEBUG else None
+
     app = FastAPI(
         title="All-in-One",
         description="All microservices combined into a single application",
         version="2.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url=docs_url,
+        redoc_url=redoc_url,
         lifespan=lifespan,
     )
-    
+
     # 存储配置
     app.state.settings = _settings
 
@@ -133,8 +152,9 @@ def create_app(_settings: Settings = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(LoggingMiddleware)
     app.add_middleware(ErrorHandlingMiddleware)
+    app.add_middleware(RequestIDMiddleware)
 
     # Exception handlers
     register_exception_handlers(app)

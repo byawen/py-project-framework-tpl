@@ -8,6 +8,7 @@ from logging.config import fileConfig
 
 # 加载 .env 文件
 from dotenv import load_dotenv
+from services_common import BaseModel
 
 # 显式指定 .env 文件路径（alembic.ini 同目录）
 env_file = os.path.join(os.path.dirname(__file__), "..", ".env")
@@ -21,19 +22,18 @@ from sqlalchemy.orm import declarative_base
 from alembic import context
 
 # ============================================================
-# 创建服务独立的 Base 类（用于 alembic 迁移）
-# 这样每个服务的迁移只会扫描自己的模型
+# 只处理本服务的表，忽略其他服务的表（防止 autogenerate 删除其他服务的表）
 # ============================================================
-Base = declarative_base()
+SERVICE_TABLE_PREFIXES = "pipo_"
+
+def include_object(object, name, type_, reflected, compare_to):
+    if type_ == "table":
+        return name.startswith(SERVICE_TABLE_PREFIXES)
+    return True
+
 
 # Import all models here and bind to service-specific Base
-from pingpong_service.app.infrastructure.persistence.models.ping_model import PingModel
-from pingpong_service.app.infrastructure.persistence.models.pong_model import PongModel
-
-# 将模型表复制到服务独立的 Base（关键步骤！）
-for model in [PingModel, PongModel]:
-    model.__table__.metadata = Base.metadata
-    Base.metadata._add_table(model.__table__.name, model.__table__.schema)
+import pingpong_service.app.infrastructure.persistence.models
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -56,7 +56,7 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-target_metadata = Base.metadata
+target_metadata = BaseModel.metadata
 
 
 def run_migrations_offline() -> None:
@@ -67,6 +67,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -79,6 +80,7 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection, 
         target_metadata=target_metadata,
         version_table=config.get_main_option("version_table"),
+        include_object=include_object,
     )
 
     with context.begin_transaction():

@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services_common import configure_uvicorn_logging
 from services_common.database import DatabaseManager
 from services_common.redis import RedisManager
-from services_common.middleware import RequestIDMiddleware, ErrorHandlingMiddleware
-from services_common.logging import Logger
+from services_common.shared_resources import SharedResources
+from services_common.middleware import RequestIDMiddleware, ErrorHandlingMiddleware, LoggingMiddleware
+from services_common.logging import Logger, configure_logging, shutdown_file_logging
 
 from pingpong_service.foundation.logging import LogManager
 from pingpong_service.foundation.config import Settings
@@ -27,7 +28,13 @@ from pingpong_service.app.domain.modules import DomainModule
 from pingpong_service.app.application.modules import ApplicationModule
 from pingpong_service.app.infrastructure.modules import InfrastructureModule
 
-async def setup(_app: FastAPI, _settings: Settings, logger: Logger, api_prefix="/api") -> Callable[
+async def setup(
+    _app: FastAPI,
+    _settings: Settings,
+    logger: Logger,
+    api_prefix="/api",
+    shared_resources: SharedResources | None = None,
+) -> Callable[
     [], Coroutine[Any, Any, None]]:
     """初始化，需要注意 all-in-one 模式共用"""
     if not logger:
@@ -39,20 +46,24 @@ async def setup(_app: FastAPI, _settings: Settings, logger: Logger, api_prefix="
     # Middleware
     # app.add_middleware(RequestAPIKeyMiddleware)
 
-    # 使用 DatabaseManager 管理数据库连接
-    _db_manager = DatabaseManager(
-        database_url=_settings.DATABASE_URL,
-        pool_size=_settings.DB_POOL_SIZE,
-        max_overflow=_settings.DB_MAX_OVERFLOW,
-        echo=_settings.DB_ECHO,
-    )
+    owns_db_manager = shared_resources is None or shared_resources.get_db() is None
+    _db_manager = shared_resources.get_db() if shared_resources else None
+    if _db_manager is None:
+        _db_manager = DatabaseManager(
+            database_url=_settings.DATABASE_URL,
+            pool_size=_settings.DB_POOL_SIZE,
+            max_overflow=_settings.DB_MAX_OVERFLOW,
+            echo=_settings.DB_ECHO,
+        )
 
-    # 使用 RedisManager 管理 Redis 连接
-    _redis_manager = RedisManager(
-        redis_url=_settings.REDIS_URL,
-        max_connections=_settings.REDIS_MAX_CONNECTIONS,
-        decode_responses=True,
-    )
+    owns_redis_manager = shared_resources is None or shared_resources.get_redis() is None
+    _redis_manager = shared_resources.get_redis() if shared_resources else None
+    if _redis_manager is None:
+        _redis_manager = RedisManager(
+            redis_url=_settings.REDIS_URL,
+            max_connections=_settings.REDIS_MAX_CONNECTIONS,
+            decode_responses=True,
+        )
 
     class BuiltinModule(Module):
         """预置基础模块的依赖注入"""
@@ -74,12 +85,20 @@ async def setup(_app: FastAPI, _settings: Settings, logger: Logger, api_prefix="
     # 设置全局 Injector
     set_injector(_injector)
 
-    async def cleaner():
-        await _redis_manager.close()
-        logger.info("Redis connection closed")
+    if owns_redis_manager:
+        logger.info(f"Redis connections initialized, service: {_settings.APP_NAME}")
+    if owns_db_manager:
+        logger.info(f"Database connections initialized, service: {_settings.APP_NAME}")
+    logger.info(f"Service initialized, service: {_settings.APP_NAME}")
 
-        await _db_manager.close()
-        logger.info("Database connection closed")
+    async def cleaner():
+        if owns_redis_manager:
+            await _redis_manager.close()
+            logger.info(f"Redis connection closed, service: {_settings.APP_NAME}")
+
+        if owns_db_manager:
+            await _db_manager.close()
+            logger.info(f"Database connection closed, service: {_settings.APP_NAME}")
 
     return cleaner
 
@@ -88,26 +107,33 @@ async def setup(_app: FastAPI, _settings: Settings, logger: Logger, api_prefix="
 async def lifespan(_app: FastAPI):
     """应用生命周期管理器"""
     # 使用新的日志系统
+    # Startup: 初始化数据库连接池
+    _settings: Settings = _app.state.settings
+
+    # 使用新的日志系统
+    configure_logging(
+        service_name=_settings.APP_NAME,
+        log_dir=_settings.LOG_DIR,
+        log_level=_settings.LOG_LEVEL,
+        log_console=_settings.LOG_CONSOLE,
+        log_file=_settings.LOG_FILE,
+        log_file_max_bytes=_settings.LOG_FILE_MAX_BYTES,
+        log_file_backup_count=_settings.LOG_FILE_BACKUP_COUNT,
+    )
+
     logger = get_logger(__name__)
     logger.info("Starting pingpong Service...")
 
     # 结构化输出 uvicorn 日志
     configure_uvicorn_logging()
 
-    # Startup: 初始化数据库连接池
-    _settings: Settings = _app.state.settings
-
     cleaner = await setup(_app, _settings, logger, "/api")
-
-    logger.info("Database and Redis connections initialized")
-    logger.info("Injector configured")
     
     yield
     
     # Shutdown: 清理资源
-    logger.info("Shutting down pingpong Service...")
-
     await cleaner()
+    shutdown_file_logging()
 
 
 def create_app(_settings: Settings = None) -> FastAPI:
@@ -115,13 +141,16 @@ def create_app(_settings: Settings = None) -> FastAPI:
     if _settings is None:
         from pingpong_service.foundation.config import get_settings
         _settings = get_settings()
-    
+
+    docs_url = "/docs" if _settings.DEBUG else None
+    redoc_url = "/redoc" if _settings.DEBUG else None
+
     app = FastAPI(
         title="Ping Pong Service",
         description="Ping Pong 认证和管理服务",
         version="2.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url=docs_url,
+        redoc_url=redoc_url,
         lifespan=lifespan,
     )
     
@@ -137,9 +166,10 @@ def create_app(_settings: Settings = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(LoggingMiddleware)
     app.add_middleware(ErrorHandlingMiddleware)
-    
+    app.add_middleware(RequestIDMiddleware)
+
     # Exception handlers
     register_exception_handlers(app)
 

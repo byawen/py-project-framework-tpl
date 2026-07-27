@@ -8,9 +8,9 @@ from pydantic import BaseModel, Field
 
 class Ping(BaseModel):
     """Ping 领域实体"""
-    id: str = Field(..., description="Ping ID")
+    ping_id: str = Field(..., description="Ping ID")
     message: str = Field(..., description="Ping message")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Created at")
+    created_at: datetime = Field(default_factory=datetime.now, description="Created at")
     
     class Config:
         """Pydantic 配置"""
@@ -23,9 +23,9 @@ class Ping(BaseModel):
 
 class Pong(BaseModel):
     """Pong 领域实体"""
-    id: str = Field(..., description="Pong ID")
+    pong_id: str = Field(..., description="Pong ID")
     data: str = Field(..., description="Pong data")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Created at")
+    created_at: datetime = Field(default_factory=datetime.now, description="Created at")
     
     class Config:
         """Pydantic 配置"""

@@ -15,15 +15,22 @@ Databases 客户端工具
         await ping_repo.create(ping)
         await pong_repo.create(pong)
 """
+import asyncio
+import json
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import AsyncGenerator, Optional
+
+from services_common.utils.sanitize_surrogates import sanitize_surrogates
+
+from sqlalchemy import DateTime
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     AsyncEngine,
     create_async_engine,
     async_sessionmaker,
 )
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from tenacity import (
     retry,
@@ -38,7 +45,31 @@ class BaseModel(DeclarativeBase):
 
     所有服务的 ORM 模型都应该继承这个 Base 类
     """
-    pass
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+    )
+
+
+async def _shielded_close(session: AsyncSession) -> None:
+    """安全关闭 session，防止 anyio cancel scope 中断连接归还。
+
+    uvicorn 的 RequestResponseCycle 在请求结束时通过 anyio cancel scope
+    取消所有正在 await 的协程。asyncio.shield 无法阻止 anyio cancel scope
+    的传播，因此需要将 close 操作提交到独立 task 中执行。
+    """
+    try:
+        await asyncio.shield(session.close())
+    except asyncio.CancelledError:
+        # shield 无法阻止 anyio cancel scope，降级为独立 task
+        try:
+            asyncio.get_running_loop().create_task(session.close())
+        except RuntimeError:
+            pass
+    except Exception:
+        pass
 
 
 class DatabaseManager:
@@ -82,6 +113,7 @@ class DatabaseManager:
                 echo=self.echo,
                 pool_pre_ping=True,
                 pool_recycle=3600,
+                json_serializer=lambda obj: json.dumps(sanitize_surrogates(obj), ensure_ascii=False),
             )
         return self._engine
 
@@ -93,7 +125,7 @@ class DatabaseManager:
                 self.engine,
                 class_=AsyncSession,
                 expire_on_commit=False,
-                autoflush=False,
+                autoflush=False
             )
         return self._session_maker
 
@@ -107,7 +139,8 @@ class DatabaseManager:
                 await pong_repo.create(pong)
                 # 自动提交，如果出错自动回滚
         """
-        async with self.session_maker() as session:
+        session = self.session_maker()
+        try:
             async with session.begin():
                 try:
                     yield session
@@ -115,6 +148,8 @@ class DatabaseManager:
                 except Exception:
                     await session.rollback()
                     raise
+        finally:
+            await _shielded_close(session)
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[AsyncSession, None]:
@@ -124,13 +159,15 @@ class DatabaseManager:
             async with db_manager.session() as session:
                 result = await session.execute(...)
         """
-        async with self.session_maker() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
+        session = self.session_maker()
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await _shielded_close(session)
 
     def _create_retry_decorator(self):
         """创建重试装饰器"""

@@ -13,8 +13,13 @@ Redis 客户端工具模块 - 所有服务共享的 Redis 客户端
     is_healthy = await redis_manager.health_check()
 """
 
-from typing import Optional, Any
+from typing import Optional, Any, Awaitable, Callable
+import asyncio
+import inspect
 import json
+import os
+import socket
+import uuid
 from redis.asyncio import Redis, ConnectionPool
 from redis.asyncio.client import Pipeline
 from tenacity import (
@@ -33,6 +38,10 @@ class RedisManager:
         redis_url: str = "redis://localhost:6379/0",
         max_connections: int = 50,
         decode_responses: bool = True,
+        socket_timeout: float | None = 10.0,
+        socket_connect_timeout: float | None = 5.0,
+        health_check_interval: int = 30,
+        retry_on_timeout: bool = True,
         # 重试配置
         retry_enabled: bool = True,
         retry_max_attempts: int = 3,
@@ -42,6 +51,10 @@ class RedisManager:
         self.redis_url = redis_url
         self.max_connections = max_connections
         self.decode_responses = decode_responses
+        self.socket_timeout = socket_timeout
+        self.socket_connect_timeout = socket_connect_timeout
+        self.health_check_interval = health_check_interval
+        self.retry_on_timeout = retry_on_timeout
 
         # 重试配置
         self.retry_enabled = retry_enabled
@@ -60,6 +73,10 @@ class RedisManager:
                 self.redis_url,
                 max_connections=self.max_connections,
                 decode_responses=self.decode_responses,
+                socket_timeout=self.socket_timeout,
+                socket_connect_timeout=self.socket_connect_timeout,
+                health_check_interval=self.health_check_interval,
+                retry_on_timeout=self.retry_on_timeout,
             )
         return self._pool
     
@@ -180,3 +197,105 @@ class RedisManager:
         if self._pool:
             await self._pool.disconnect()
             self._pool = None
+
+
+class RedisWorkerLock:
+    """基于 Redis 的单活后台 Worker 锁。"""
+
+    _RELEASE_SCRIPT = """
+    if redis.call("GET", KEYS[1]) == ARGV[1] then
+        return redis.call("DEL", KEYS[1])
+    end
+    return 0
+    """
+
+    _RENEW_SCRIPT = """
+    if redis.call("GET", KEYS[1]) == ARGV[1] then
+        return redis.call("EXPIRE", KEYS[1], ARGV[2])
+    end
+    return 0
+    """
+
+    def __init__(
+        self,
+        redis: RedisManager,
+        lock_key: str,
+        ttl_seconds: int = 30,
+        renew_seconds: int = 10,
+        owner_id: str | None = None,
+    ) -> None:
+        self._redis = redis
+        self.lock_key = lock_key
+        self.ttl_seconds = ttl_seconds
+        self.renew_seconds = renew_seconds
+        self.owner_id = owner_id or f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
+        self._renew_task: asyncio.Task | None = None
+        self._running = False
+
+    async def acquire(self) -> bool:
+        acquired = await self._redis.client.set(
+            self.lock_key,
+            self.owner_id,
+            ex=self.ttl_seconds,
+            nx=True,
+        )
+        return bool(acquired)
+
+    async def release(self) -> bool:
+        released = await self._redis.client.eval(
+            self._RELEASE_SCRIPT,
+            1,
+            self.lock_key,
+            self.owner_id,
+        )
+        return bool(released)
+
+    async def renew(self) -> bool:
+        renewed = await self._redis.client.eval(
+            self._RENEW_SCRIPT,
+            1,
+            self.lock_key,
+            self.owner_id,
+            self.ttl_seconds,
+        )
+        return bool(renewed)
+
+    def start_auto_renew(
+        self,
+        on_lost: Callable[[], Any] | Callable[[], Awaitable[Any]] | None = None,
+    ) -> None:
+        if self._renew_task and not self._renew_task.done():
+            return
+        self._running = True
+        self._renew_task = asyncio.create_task(self._renew_loop(on_lost))
+
+    async def stop_auto_renew(self) -> None:
+        self._running = False
+        if self._renew_task:
+            self._renew_task.cancel()
+            try:
+                await self._renew_task
+            except asyncio.CancelledError:
+                pass
+            self._renew_task = None
+
+    async def _renew_loop(
+        self,
+        on_lost: Callable[[], Any] | Callable[[], Awaitable[Any]] | None,
+    ) -> None:
+        while self._running:
+            await asyncio.sleep(self.renew_seconds)
+            try:
+                if await self.renew():
+                    continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
+            self._running = False
+            if on_lost:
+                result = on_lost()
+                if inspect.isawaitable(result):
+                    await result
+            break

@@ -1,11 +1,23 @@
 # 框架开发指南
 
-本项目采用微服务架构，支持两种运行模式：
+本项目采用微服务架构，分为两大类组件：
 
-1. **Standalone 独立服务模式** - 每个服务独立运行
-2. **All-in-One 模式** - 所有服务组合成一个应用，方便开发调试
+- **services/** — 对外提供 API/端口的微服务（FastAPI + uvicorn）
+- **workers/** — 无 API/端口的后台任务进程（Celery 等消息消费者）
+
+每一类都支持两种运行模式：
+
+| 类别 | 独立模式 | 聚合模式                                             |
+|------|----------|--------------------------------------------------|
+| 服务 services | **Standalone** 每个服务独立运行 | **All-in-One** 所有服务组合成一个 FastAPI 进程              |
+| 工作者 workers | **Standalone** 每个 worker 独立运行 | **Worker-in-One** 所有 worker 聚合到一进程（每个任务队列消费是多进程） |
+
+聚合模式共享同一套 DB/Redis 连接，方便本地开发调试；独立模式适合按需部署与扩缩容。
 
 ---
+
+## 扩展说明
+目前 services/ 和 workers/ 在同一个仓库中，后续有多仓库时再拆分
 
 ## 快速开始
 
@@ -45,6 +57,18 @@ make compose-up
 服务启动后访问：
 - API 文档: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
+
+### 4. 启动 Worker (后台任务)
+
+```bash
+# Worker-in-One 模式 (所有 worker 聚合到一个进程)
+make worker-in-one
+
+# Standalone 模式 (单个 worker 独立运行)
+cd workers/pingpong-worker && uv run python -m pingpong_worker.main
+```
+
+> Worker 没有 HTTP 端口，启动后通过消息中间件 (Redis/Celery) 消费任务，无 `/docs` 入口。
 
 ---
 
@@ -86,6 +110,14 @@ make compose-up
 | `make all-in-one-install` | 安装 All-in-One 依赖 |
 | `make all-in-one-add` | 将 All-in-One 添加到工作区 |
 
+### Worker (后台任务)
+
+| 命令 | 说明 |
+|------|------|
+| `make worker-in-one` | 启动 Worker-in-One 模式 (所有 worker 聚合到一个进程) |
+| `make worker-in-one-install` | 安装 Worker-in-One 依赖 |
+| `make generate-worker WORKER=<name> SHORT_PREFIX=<prefix>` | 生成一个新 worker (无 API、无端口) |
+
 ### Docker Compose
 
 | 命令 | 说明 |
@@ -113,20 +145,30 @@ make compose-up
 
 ```
 /
-├── services/                     # 微服务源码
-│   ├── common/                   # 公共服务 (services-common)
+├── services/                     # 微服务源码 (API + 端口)
+│   ├── common/                   # 公共服务库 (services-common)
 │   │   └── src/
-│   │       └── services_common/  # 共享模块
+│   │       └── services_common/  # 服务共享模块 (含 FastAPI/Web 能力)
 │   └── pingpong-service/         # 示例服务
 │       └── src/
 │           └── pingpong_service/ # 服务代码
-├── all-in-one/                   # All-in-One 组合应用
+├── all-in-one/                   # All-in-One 组合应用 (聚合所有 service)
 │   └── src/
 │       └── all_in_one/           # 入口模块
+├── workers/                      # 后台任务源码 (无 API、无端口)
+│   ├── common/                   # 公共 worker 库 (workers-common)
+│   │   └── src/
+│   │       └── workers_common/   # worker 共享模块 (无 Web 依赖)
+│   └── pingpong-worker/          # 示例 worker
+│       └── src/
+│           └── pingpong_worker/  # worker 代码 (broker/handlers/...)
+├── worker-in-one/                # Worker-in-One 组合进程 (聚合所有 worker)
+│   └── src/
+│       └── worker_in_one/        # 入口模块 (broker 聚合编排)
 ├── infrastructure/               # 基础设施配置
 │   ├── docker-compose.yml        # Docker Compose 配置
 │   └── kubernetes/               # K8s 配置
-├── scripts/                      # 辅助脚本
+├── scripts/                      # 辅助脚本 (含 generate-service / generate-worker)
 ├── Makefile                      # 构建命令
 └── README.md                     # 本文档
 ```
@@ -162,12 +204,55 @@ make all-in-one
 
 ---
 
+### 模式 3: Worker Standalone 独立模式
+
+每个 worker 独立运行，独立消费消息中间件中的任务。
+
+```bash
+cd workers/pingpong-worker && uv run python -m pingpong_worker.main
+```
+
+worker 在 `main.py` 中显式创建 broker 实例并注册到 `BrokerManager` (celery / rabbitmq / pubsub ...)，
+broker 抽象位于 `workers/<worker>/src/<worker>/broker/`，新增中间件只需:
+
+1. 在 `broker/implementations/` 下新建实现类，继承 `BaseBroker`
+2. 在 `broker/factory.py` 的 `BROKER_REGISTRY` 中注册一行
+
+---
+
+### 模式 4: Worker-in-One 组合模式
+
+所有 worker 聚合到同一个进程，共享 DB/Redis 连接。
+
+```bash
+make worker-in-one
+```
+
+聚合进程通过 **聚合 Broker 抽象** 支持多种中间件并存：
+
+```
+workers_registry()  ->  [WorkerSpec{name, broker_type, register_handlers}...]
+                            │  broker_type 在 WorkerSpec 中显式指定
+BrokerRunner.build()  ->  按 broker_type 分组，每组创建一个聚合 Broker
+BrokerRunner.run()    ->  需要主线程的 Broker(如 Celery) 占前台
+                          其余 Broker 进 daemon 线程并发运行
+```
+
+- 同类型中间件的多个 worker 共享同一个聚合 Broker 实例
+- 不同类型中间件的 worker 在同一进程内并发消费，互不阻塞
+- 扩展新中间件: 在 `worker-in-one/src/worker_in_one/broker/implementations/` 新建实现类继承 `AggregateBroker`，并在 `factory.py` 的 `AGGREGATE_BROKER_REGISTRY` 注册
+
+---
+
 ### 添加新服务到工作区
 
 1. **创建服务目录** (services/xxxx-service)
    ```bash
-   make generate-service SERVICE=your-new-service
+   make generate-service SERVICE=your-new-service SHORT_PREFIX=yns SERVICE_CODE=20 PORT=8001
    ```
+
+   > `SERVICE_CODE`（1-89）是全局唯一的服务编号，用于生成 8 位业务码（biz_code）。
+   > 脚本会自动检测服务码冲突（与 port、prefix 检测逻辑一致），并写入 `service.metadata`。
 
 2. **添加服务到工作区**
    ```bash
@@ -218,6 +303,58 @@ make all-in-one
 
 ---
 
+### 添加新 Worker 到工作区
+
+1. **生成 worker 目录** (workers/xxxx-worker)
+   ```bash
+   make generate-worker WORKER=your-new-worker SHORT_PREFIX=ynw
+   ```
+   > 脚本会基于 pingpong-worker 模板生成代码，替换名称与前缀，
+   > 校验前缀是否与现有 service/worker 冲突，并更新根 `pyproject.toml`。
+
+2. **安装依赖**
+   ```bash
+   make worker-in-one-install
+   ```
+
+3. **添加到 Worker-in-One** (可选)
+
+   编辑 `worker-in-one/src/worker_in_one/config.py`，新增该 worker 的配置提取方法:
+
+   ```python
+    def get_xxx_worker_settings(self):
+        config_dict = vars(self).copy()
+        config_dict.update({
+            "MODEL": "worker-in-one",
+            "APP_NAME": self.APP_NAME + "-xxx",
+            "REDIS_PREFIX": "xxx",
+        })
+        return XxxWorkerSettings(**config_dict)
+   ```
+
+   编辑 `worker-in-one/src/worker_in_one/workers.py`，在 `workers_registry` 中加载并产出 `WorkerSpec`:
+
+   ```python
+    try:
+        from xxx_worker.main import setup as xxx_worker_setup
+        from xxx_worker.handlers import register_all_handlers as xxx_register
+        worker_settings = _settings.get_xxx_worker_settings()
+        cleaner = await xxx_worker_setup(worker_settings, logger, shared_resources=shared_resources)
+        cleaner_list.append(cleaner)
+        specs.append(
+            WorkerSpec(
+                name="xxx-worker",
+                broker_type="celery",
+                register_handlers=xxx_register,
+                settings=worker_settings,
+            )
+        )
+    except Exception as e:
+        logger.warning(f"Failed to load xxx-worker: {e}")
+   ```
+
+---
+
 ### 热重载配置
 
 All-in-One 模式支持热重载，修改以下目录中的代码会自动重启：
@@ -254,7 +391,7 @@ Standalone 模式由各服务自己的配置决定 (通常使用 uvicorn `--relo
 
 ### 公共服务 (services-common)
 
-`services-common` 提供所有服务共享的基础能力：
+`services-common` 提供所有 **service** 共享的基础能力：
 
 | 模块 | 说明 |
 |------|------|
@@ -262,6 +399,38 @@ Standalone 模式由各服务自己的配置决定 (通常使用 uvicorn `--relo
 | **RedisManager** | Redis 连接管理 |
 | **HealthChecker** | 健康检查 |
 | **配置继承** | 各服务可继承基础配置类 |
+| **Web 能力** | HTTP response、中间件、异常处理器、uvicorn JSON 日志等 |
+
+### 公共 Worker 库 (workers-common)
+
+`workers-common` 提供所有 **worker** 共享的基础能力，**不依赖 FastAPI/uvicorn**：
+
+| 模块 | 说明 |
+|------|------|
+| **DatabaseManager / BaseModel** | 数据库连接管理 (异步 SQLAlchemy) |
+| **RedisManager / RedisWorkerLock** | Redis 连接管理 + 单活 worker 锁 |
+| **配置继承** | 去掉 HOST/PORT/CORS 等 Web 字段的配置基类 |
+| **SharedResources** | Worker-in-One 共享 DB/Redis 注册表 |
+| **logging / exceptions / utils** | 统一日志、异常基类、工具函数 |
+
+> **边界约束**: `workers/` 代码 **禁止** import `services_common`。
+> services 与 workers 是两个独立领域边界，各自使用自己的 common 库，
+> 避免后台任务进程被迫携带 Web 框架依赖。
+
+### Worker 分层结构
+
+worker 用 `handlers/` 取代 service 的 `api/`，用 `broker/` 抽象消息中间件：
+
+```
+broker/                 # 消息中间件抽象 (可插拔)
+├── base.py             # BaseBroker 抽象接口
+├── factory.py          # BROKER_REGISTRY 工厂
+└── implementations/    # celery_broker.py 等具体实现
+handlers/               # 任务入口层 (等价于 service 的 api 层)
+├── registry.py         # 集中注册所有 handler 到 broker
+└── xxx_demo.py         # 具体 handler
+app/                    # DDD 分层 (domain / application / infrastructure)
+```
 
 ### 领域驱动设计
 
@@ -275,6 +444,25 @@ infrastructure/
 └── persistence/
     └── repositories/  # 仓储实现 (SQL)
 ```
+
+### 统一业务码（biz_code）
+
+所有 API 响应外层携带 `biz_code` 字段（8 位整数），用于跨服务精确定位业务场景：
+
+```
+biz_code = 1 SS DDD EEE
+           │ │  │   └─ 3位 业务序号 (001-999, 0=成功)
+           │ │  └──── 3位 业务大类 (认证/校验/未找到/冲突...)
+           │ └──────── 2位 服务编号 (00-89, 00=模板/公共)
+           └────────── 固定前缀 1（保证始终 8 位数）
+```
+
+- **服务编号** 全局唯一，由 `generate-service` 脚本分配，写入 `service.metadata` 的 `service_code` 字段
+- **业务大类** 由 `services_common.biz_code.BizCategory` 统一定义，所有服务共用
+- 各服务在 `foundation/biz_code.py` 中定义 `BizCode(IntEnum)` 枚举，每个成员带中文注释描述具体问题
+- 所有异常绑定 BizCode，由异常处理器自动透传到响应
+
+> 详细规范见 `develop/ai-coding-service-app.md` §13。
 
 ---
 
@@ -296,7 +484,22 @@ make help
 
 修改对应配置文件中的 `DATABASE_URL`：
 - All-in-One: `all-in-one/.env`
-- Standalone: `services/<service>/.env`
+- Standalone 服务: `services/<service>/.env`
+- Worker-in-One: `worker-in-one/.env`
+- Standalone Worker: `workers/<worker>/.env`
+
+### 生成新 worker
+
+```bash
+make generate-worker WORKER=content-ops SHORT_PREFIX=cops
+```
+
+### 为 worker 切换/新增消息中间件
+
+worker 在 `main.py` 中显式创建 broker 实例并注册到 `BrokerManager` (默认 `celery`)。
+新增中间件实现后，在对应注册表登记即可:
+- 单 worker: `workers/<worker>/.../broker/factory.py` 的 `BROKER_REGISTRY`
+- Worker-in-One: `worker-in-one/.../broker/factory.py` 的 `AGGREGATE_BROKER_REGISTRY`
 
 ### 只运行某个服务的测试
 

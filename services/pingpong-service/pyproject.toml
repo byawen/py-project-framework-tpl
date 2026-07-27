@@ -48,8 +48,8 @@ dev-dependencies = [
     "ruff>=0.8.0",
 ]
 
-#[tool.uv.sources]
-#services-common = { workspace = true, editable = true }
+[tool.uv.sources]
+services-common = { workspace = true }
 
 [tool.ruff]
 target-version = "py312"

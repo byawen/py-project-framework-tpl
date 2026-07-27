@@ -1,24 +1,32 @@
 """All-in-One Configuration - Unified settings for all services"""
 
 from functools import lru_cache
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 导入各服务配置类
-from services_common.config import (
-    AppSettings,
-    DatabaseSettings,
-    RedisSettings,
-)
+# 服务配置类
+from services_common import AppSettings, DatabaseSettings, RedisSettings, WorkersSettings
+from pingpong_service.foundation.config import Settings as PingPongSettings
+
+class AllInOneSettings(AppSettings, DatabaseSettings, RedisSettings, WorkersSettings, BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="allow",
+    )
 
 
-class Settings(AppSettings, DatabaseSettings, RedisSettings):
-    """All-in-One mode settings - 继承公共配置 + 各服务配置"""
+class Settings(
+    AllInOneSettings,
+    PingPongSettings,
+):
+    """All-in-One mode settings - 继承各服务配置（各服务已继承基础配置）"""
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="allow",
     )
 
     # ============================================
@@ -32,6 +40,17 @@ class Settings(AppSettings, DatabaseSettings, RedisSettings):
     # All-in-One 专用配置
     # ============================================
     APP_NAME: str = "all-in-one"
+    MODEL: str = "all-in-one"
+    ALL_IN_ONE_SHARE_DB: bool = True
+    ALL_IN_ONE_SHARE_REDIS: bool = True
+
+    # # JWT
+    # JWT_SECRET_KEY: str = "your-jwt-secret-key-change-in-production"
+    # JWT_ALGORITHM: str = "HS256"
+    # ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1小时
+    # REFRESH_TOKEN_EXPIRE_MINUTES: int = 180  # 刷新3小时
+    #
+    # SERVICE_BASE_URL: Optional[str] = "http://localhost:8000"
 
     # ============================================
     # 服务特定配置
@@ -40,25 +59,24 @@ class Settings(AppSettings, DatabaseSettings, RedisSettings):
     # PingPong 服务配置
     def get_pingpong_settings(self):
         """获取 PingPong 服务配置"""
-        from pingpong_service.foundation.config import Settings as PingPongSettings
-        # 从当前配置中提取 PingPong 相关的配置
-        return PingPongSettings(
-            MODEL="all-in-one",  # 必须写上
-            APP_NAME=self.APP_NAME + "-pingpong",
-            DEBUG=self.DEBUG,
-            ENVIRONMENT=self.ENVIRONMENT,
-            HOST=self.HOST,
-            PORT=self.PORT,
-            CORS_ORIGINS=self.CORS_ORIGINS,
-            DATABASE_URL=self.DATABASE_URL,
-            DB_POOL_SIZE=self.DB_POOL_SIZE,
-            DB_MAX_OVERFLOW=self.DB_MAX_OVERFLOW,
-            DB_ECHO=self.DB_ECHO,
-            REDIS_URL=self.REDIS_URL,
-            REDIS_MAX_CONNECTIONS=self.REDIS_MAX_CONNECTIONS,
-            REDIS_PREFIX="pingpong",
-            GITHUB_SERVICE_URL="http://localhost:8003",
-        )
+        config_dict = vars(self).copy()
+        config_dict.update({
+            "MODEL": "all-in-one",
+            "APP_NAME": self.APP_NAME + "-pingpong",
+            "REDIS_PREFIX": "pipo",
+        })
+        return PingPongSettings(**config_dict)
+
+    # 新增 service 在此添加:
+    # def get_xxx_settings(self):
+    #     """获取 Xxx 服务配置"""
+    #     config_dict = vars(self).copy()
+    #     config_dict.update({
+    #         "MODEL": "all-in-one",
+    #         "APP_NAME": self.APP_NAME + "-xxx",
+    #         "REDIS_PREFIX": "xxx",
+    #     })
+    #     return XxxxSettings(**config_dict)
 
 @lru_cache
 def get_settings() -> Settings:

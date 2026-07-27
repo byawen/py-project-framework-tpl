@@ -13,7 +13,11 @@ dependencies = [
     "python-multipart>=0.0.22",
     "services-common",
     "pingpong-service",
-    "all-in-one",]
+    "all-in-one",
+    "workers-common",
+    "pingpong-worker",
+    "worker-in-one",
+]
 
 [tool.uv]
 dev-dependencies = [
@@ -29,12 +33,18 @@ dev-dependencies = [
 members = [
     "all-in-one",
     "services/common",
-    "services/pingpong-service",]
+    "services/pingpong-service",
+    "workers/common",
+    "workers/pingpong-worker",
+    "worker-in-one",]
 
 [tool.uv.sources]
-all-in-one = { workspace = true, editable = true }
-services-common = { workspace = true, editable = true }
-pingpong-service = { workspace = true, editable = true }
+all-in-one = { workspace = true }
+services-common = { workspace = true }
+pingpong-service = { workspace = true }
+workers-common = { workspace = true }
+pingpong-worker = { workspace = true }
+worker-in-one = { workspace = true }
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -56,5 +66,4 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-
 
