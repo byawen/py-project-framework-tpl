@@ -241,13 +241,14 @@ COMMON_SRC := $(PWD)/services/common/src
 PINGPONG_SRC := $(PWD)/services/pingpong-service/src
 
 .PHONY: all-in-one
+ALL_IN_ONE_PORT ?= 8002
 all-in-one:
-	@echo "$(GREEN)Starting All-in-One mode...$(NC)"
+	@echo "$(GREEN)Starting All-in-One mode (port $(ALL_IN_ONE_PORT))...$(NC)"
 	@cd all-in-one && PYTHONPATH="$(COMMON_SRC):$(PINGPONG_SRC):$(PWD)/all-in-one/src:$$PYTHONPATH" uv run uvicorn src.all_in_one.main:app \
 		--reload \
 		--reload-dir ../services/ \
 		--reload-dir ../all-in-one/src \
-		--port 8002 --host 0.0.0.0
+		--port $(ALL_IN_ONE_PORT) --host 0.0.0.0
 
 .PHONY: all-in-one-prod
 all-in-one-prod:
@@ -289,19 +290,19 @@ worker-in-one-install:
 
 .PHONY: compose-up
 compose-up:
-	@docker-compose -f infrastructure/docker-compose.yml up -d
+	@docker-compose -f deploy/docker-compose.yml up -d
 
 .PHONY: compose-up-dev
 compose-up-dev:
-	@docker-compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.dev.yml up -d
+	@docker-compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
 
 .PHONY: compose-down
 compose-down:
-	@docker-compose -f infrastructure/docker-compose.yml down
+	@docker-compose -f deploy/docker-compose.yml down
 
 .PHONY: compose-logs
 compose-logs:
-	@docker-compose -f infrastructure/docker-compose.yml logs -f
+	@docker-compose -f deploy/docker-compose.yml logs -f
 
 .PHONY: compose-logs-service
 compose-logs-service:
@@ -309,7 +310,7 @@ ifndef SERVICE
 	@echo "$(RED)Error: SERVICE is required.$(NC)"
 	@exit 1
 endif
-	@docker-compose -f infrastructure/docker-compose.yml logs -f $(SERVICE)
+	@docker-compose -f deploy/docker-compose.yml logs -f $(SERVICE)
 
 # ============================================================
 # Kubernetes
@@ -317,11 +318,11 @@ endif
 
 .PHONY: k8s-apply
 k8s-apply:
-	@kubectl apply -f infrastructure/kubernetes/
+	@kubectl apply -f deploy/kubernetes/
 
 .PHONY: k8s-delete
 k8s-delete:
-	@kubectl delete -f infrastructure/kubernetes/
+	@kubectl delete -f deploy/kubernetes/
 
 .PHONY: k8s-logs
 k8s-logs:
