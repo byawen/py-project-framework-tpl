@@ -24,7 +24,20 @@ class Settings(AppSettings, DatabaseSettings, RedisSettings, WorkersSettings):
         "pingpong_worker.default": {"queue": "pingpong.default.default"},
         "pingpong_worker.pingpong": {"queue": "pingpong.test.ping"},
         "pingpong_worker.beat_demo": {"queue": "pingpong.test.beat_demo"},
+        "pingpong_worker.echo_task": {"queue": "pingpong_worker.echo.process"},
     }
+
+    # ── echo 任务协议常量（与 pingpong-service 逐字对齐）──
+    # topic 两段 {pkg}.{task}；与 service 侧 PIPO_ECHO_TASK_TOPIC 必须一致
+    PIPO_ECHO_TASK_TOPIC: str = "pingpong_worker.echo_task"
+
+    # ── beat_demo 定时任务 topic（Celery Beat 调度）──
+    # topic 两段 {pkg}.{task}；与 PIPO_CELERY_BEAT_SCHEDULE / PIPO_CELERY_TASK_ROUTES 中的值一致
+    PIPO_BEAT_DEMO_TOPIC: str = "pingpong_worker.beat_demo"
+
+    # ── pingpong demo 任务 topic（消费型，pp_demo 模板残留）──
+    # topic 两段 {pkg}.{task}；与 PIPO_CELERY_TASK_ROUTES 中的 key 一致
+    PIPO_PINGPONG_TASK_TOPIC: str = "pingpong_worker.pingpong"
     # CELERY_TASK_QUEUES 留空 — 启动时从 TASK_ROUTES 自动派生
     PIPO_CELERY_TASK_QUEUES: str = ""
 

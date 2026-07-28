@@ -7,6 +7,9 @@ class ApplicationModule(Module):
         from pingpong_service.app.application.commands import PongCommand
         binder.bind(PongCommand, to=PongCommand, scope=None)
 
+        from pingpong_service.app.application.commands.dispatch_echo_task import DispatchEchoTaskCommand
+        binder.bind(DispatchEchoTaskCommand, to=DispatchEchoTaskCommand, scope=None)
+
         from pingpong_service.app.application.queries import PingQuery
         binder.bind(PingQuery, to=PingQuery, scope=None)
 
