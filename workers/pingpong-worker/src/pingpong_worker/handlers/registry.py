@@ -12,18 +12,19 @@ if TYPE_CHECKING:
     from workers_common.broker.base import BaseBroker
 
 
-# Beat 定时任务 topic（Celery Beat 调度）
-BEAT_DEMO_TOPIC = "pingpong_worker.beat_demo"
-
-
 def register_all_handlers(broker: "BaseBroker") -> None:
     """注册所有消息处理器"""
+    from pingpong_worker.foundation.config import get_settings
     from pingpong_worker.handlers.pp_demo import handle_pingpong_task
     from pingpong_worker.handlers.beat_demo_handler import handle_beat_demo
+    from pingpong_worker.handlers.echo_task_handler import handle_echo_task
 
-    broker.register_handler("pingpong_worker.pingpong", handle_pingpong_task)
-    broker.register_handler(BEAT_DEMO_TOPIC, handle_beat_demo)
+    settings = get_settings()
+    # topic 从配置读取（与 PIPO_CELERY_TASK_ROUTES / PIPO_CELERY_BEAT_SCHEDULE 逐字对齐）
+    pingpong_topic = settings.PIPO_PINGPONG_TASK_TOPIC
+    echo_task_topic = settings.PIPO_ECHO_TASK_TOPIC
+    beat_demo_topic = settings.PIPO_BEAT_DEMO_TOPIC
 
-    # 新增 handler 在此注册:
-    # from pingpong_worker.handlers.your_handler import handle_your_task
-    # broker.register_handler("pingpong_worker.tasks.your_task", handle_your_task)
+    broker.register_handler(pingpong_topic, handle_pingpong_task)
+    broker.register_handler(beat_demo_topic, handle_beat_demo)
+    broker.register_handler(echo_task_topic, handle_echo_task)

@@ -5,8 +5,10 @@
 from fastapi import APIRouter
 
 from pingpong_service.app.api.v1.endpoints import pp_demo
+from pingpong_service.app.api.v1.endpoints import echo_task
 
 api_router = APIRouter(prefix="/v1/pingpong")
 
 # 包含端点路由
 api_router.include_router(pp_demo.router)
+api_router.include_router(echo_task.router)

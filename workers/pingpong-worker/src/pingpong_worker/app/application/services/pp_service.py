@@ -6,6 +6,7 @@
 from typing import Optional
 from injector import inject
 from workers_common.database import DatabaseManager
+from workers_common.utils.id import generate_id
 
 from pingpong_worker.app.domain.entities.ping import Ping, Pong
 from pingpong_worker.app.domain.repositories.ping_repository import PingRepository
@@ -80,7 +81,7 @@ class PPService:
     async def create_pong(self, data: str) -> Pong:
         """创建 Pong"""
         pong_data = PongData(data)
-        pong = Pong(data=pong_data)
+        pong = Pong(pong_id=generate_id(), data=pong_data)
         return await self.pong_repo.create(pong)
 
     async def update_pong(self, pong_id: str, data: str) -> Optional[Pong]:
