@@ -110,6 +110,10 @@ def run_worker():
     logger = get_logger(__name__)
     logger.info("Starting pingpong Worker...")
 
+    # 装配 DI 容器（Redis + DB + clients/application/infra）
+    # 必须在 start_all() 之前完成，否则 handler 内 get_injector() 会返回未初始化
+    asyncio.run(setup(_settings, logger))
+
     # 获取 broker manager 并启动消费
     from workers_common.broker import BrokerManager
 
