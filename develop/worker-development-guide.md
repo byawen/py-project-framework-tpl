@@ -1,4 +1,4 @@
-# Worker 开发指南
+# Worker 开发指南（从 0 到 1 到部署）
 
 > 面向新成员的端到端实战手册。读完本文你应当能够：独立创建一个新 Worker、理解它和 Service 的关系、写一个任务处理器、配置队列/重试/Beat 定时任务、跑通启动与日志，并了解它如何被部署（单进程聚合运行）。
 >
@@ -14,7 +14,7 @@
 2. [Worker 与 Service 的关系](#2-worker-与-service-的关系)
 3. [环境准备](#3-环境准备)
 4. [技术栈：Celery + 自研 Broker 抽象](#4-技术栈celery--自研-broker-抽象)
-5. [从一个新 Worker 开始](#5-从一个新-worker-开始0-到-1)
+5. [从一个新 Worker 开始：0 到 1](#5-从一个新-worker-开始0-到-1)
 6. [目录结构](#6-目录结构)
 7. [handlers：Worker 的"API 层"](#7-handlersworker-的-api-层)
 8. [main.py：启动与 DI 装配](#8-mainpy启动与-di-装配)
@@ -176,21 +176,21 @@ BROKER_REGISTRY: dict[str, str] = {
 
 ---
 
-## 5. 从一个新 Worker 开始
+## 5. 从一个新 Worker 开始：0 到 1
 
 和 Service 一样，用脚本克隆 `workers/pingpong-worker`（模板）做有序字符串替换。
 
 ### 5.1 脚手架命令
 
 ```bash
-make generate-worker WORKER=<kebab名> SHORT_PREFIX=<3-6位前缀>
+make generate-worker WORKER=<kebab名> SHORT_PREFIX=<2-10位前缀>
 # 例：
 make generate-worker WORKER=notify SHORT_PREFIX=ntf
 ```
 
 参数：
 - `WORKER`：kebab-case，字母/数字/连字符，不能数字开头（如 `notify`）。
-- `SHORT_PREFIX`：3–6 位字母/数字（如 `ntf`）。**会去 `workers/` 和 `services/` 双向查重**，避免和任何服务/Worker 撞前缀。
+- `SHORT_PREFIX`：2–10 位字母/数字（如 `ntf`）。**会去 `workers/` 和 `services/` 双向查重**，避免和任何服务/Worker 撞前缀。
 
 > Worker **不需要 `service_code` 和 `port`**（无 biz_code 池、无 HTTP 端口）。这是 Worker 与 Service 生成命令的主要差异。
 

@@ -17,35 +17,6 @@ def _get_logger():
     return get_logger(__name__)
 
 
-# ── 服务级 BizCode 映射注册表（all-in-one 多服务共用 app 时按路径前缀路由）──
-# 各服务在自己的 setup() 中调用 register_service_bizcode_mapper 注册自己的前缀。
-# mapper 签名: (http_status: int, exc: Exception) -> int  返回该服务的 biz_code。
-# 未注册的服务 _resolve_bizcode 返回 0（保持原默认行为，向后兼容）。
-_SERVICE_BIZCODE_MAPPERS: list[tuple[str, callable]] = []
-
-
-def register_service_bizcode_mapper(prefix: str, mapper) -> None:
-    """服务在 setup() 时注册自己的路径前缀与 BizCode 映射器。
-
-    Args:
-        prefix: 服务路由前缀，如 "/api/v1/skill-provider"（请求路径以此开头则命中该服务）
-        mapper: 可调用对象 (http_status: int, exc: Exception) -> int，返回服务级 biz_code
-    """
-    _SERVICE_BIZCODE_MAPPERS.append((prefix, mapper))
-
-
-def _resolve_bizcode(request: Request, http_status: int, exc: Exception) -> int:
-    """按请求路径前缀查服务级 BizCode；未匹配返回 0（走原默认，向后兼容）。"""
-    path = request.url.path
-    for prefix, mapper in _SERVICE_BIZCODE_MAPPERS:
-        if path.startswith(prefix):
-            try:
-                return int(mapper(http_status, exc))
-            except Exception:
-                return 0
-    return 0
-
-
 def _sanitize_for_json(value):
     if isinstance(value, BaseException):
         return str(value)
@@ -89,7 +60,6 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 
     response = ErrorResponse(
         code=exc.status_code,
-        biz_code=_resolve_bizcode(request, exc.status_code, exc),
         result=result,
         message=message,
         detail=detail,
@@ -104,10 +74,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """处理验证异常"""
     is_dev = _is_dev_environment(request)
     detail = _sanitize_for_json(exc.errors()) if is_dev else None
-
+    
     response = ErrorResponse(
         code=ResponseCode.UNPROCESSABLE_ENTITY,
-        biz_code=_resolve_bizcode(request, ResponseCode.UNPROCESSABLE_ENTITY, exc),
         message="Request validation failed",
         detail=detail,
     )
@@ -130,7 +99,6 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     # 永远不向客户端暴露未处理异常的原始信息（可能包含 SQL、堆栈、连接串等）
     response = ErrorResponse(
         code=ResponseCode.INTERNAL_SERVER_ERROR,
-        biz_code=_resolve_bizcode(request, ResponseCode.INTERNAL_SERVER_ERROR, exc),
         message="Internal server error",
         detail=None,
     )

@@ -6,11 +6,11 @@ from typing import Optional
 from dataclasses import dataclass
 
 from pingpong_service.app.application.common.exception import RegistrationFailedException
-from services_common import RedisManager
 from services_common.utils import generate_id
 from injector import inject
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis
 
 from pingpong_service.clients.github.oauth import GithubOauthAPIClient
 from pingpong_service.app.domain.entities.ping import Ping
@@ -34,7 +34,7 @@ class PingQuery:
     def __init__(
         self,
         db: AsyncSession,
-        redis: RedisManager,
+        redis: Redis,
         ping_repo: PingRepository,
         log_manager: LogManager,
         github_client: GithubOauthAPIClient,

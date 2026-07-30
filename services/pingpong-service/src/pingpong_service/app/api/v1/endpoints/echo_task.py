@@ -10,6 +10,7 @@ from pingpong_service.foundation.logging import get_logger
 from pingpong_service.app.api.v1.schemas.echo_task import (
     EchoTaskRequest,
     EchoTaskResponse,
+    EchoTaskDataResponse,
 )
 from pingpong_service.app.application.commands.dispatch_echo_task import DispatchEchoTaskCommand
 
@@ -22,11 +23,11 @@ def get_dispatch_echo_task_command() -> DispatchEchoTaskCommand:
     return get_injector().get(DispatchEchoTaskCommand)
 
 
-@router.post("", response_model=DataResponse[EchoTaskResponse])
+@router.post("", response_model=DataResponse[EchoTaskDataResponse])
 async def dispatch_echo_task(
     request: EchoTaskRequest,
     command: DispatchEchoTaskCommand = Depends(get_dispatch_echo_task_command),
-) -> DataResponse[EchoTaskResponse]:
+) -> DataResponse[EchoTaskDataResponse]:
     """投递 echo 异步任务 - 将 message 发送到 pingpong-worker 队列"""
     logger.info("Echo task dispatch requested", message=request.message)
     result = await command.execute(request.message)

@@ -15,11 +15,9 @@ from services_common.redis import RedisManager
 from services_common.shared_resources import SharedResources
 from services_common.middleware import RequestIDMiddleware, ErrorHandlingMiddleware, LoggingMiddleware
 from services_common.logging import Logger, configure_logging, shutdown_file_logging
-from services_common.exception_handlers import register_service_bizcode_mapper
 
 from pingpong_service.foundation.logging import LogManager
 from pingpong_service.foundation.config import Settings
-from pingpong_service.foundation.biz_code import BizCode
 from pingpong_service.app.api.v1 import api_router
 from pingpong_service.foundation.exception_handlers import register_exception_handlers
 from pingpong_service.foundation.logging import get_logger
@@ -29,33 +27,6 @@ from pingpong_service.clients.modules import ClientsModule
 from pingpong_service.app.domain.modules import DomainModule
 from pingpong_service.app.application.modules import ApplicationModule
 from pingpong_service.app.infrastructure.modules import InfrastructureModule
-
-
-def _register_bizcode_mapper(api_prefix: str) -> None:
-    """注册 pingpong 的路径前缀与 BizCode 映射器。
-
-    all-in-one 多服务共用 app 时，公共异常 handler 按请求路径前缀命中本服务，
-    返回 pingpong 服务级 biz_code（SS=00 模板占位，实际服务由 generate-service 替换 SERVICE_CODE）。
-    standalone 模式下注册也无害（异常 handler 同样按 path 命中）。
-
-    前缀取自 api_router.prefix（与 router 定义一致，避免硬编码漂移）。
-    """
-    prefix = f"{api_prefix}{api_router.prefix}"
-
-    # HTTP 状态码 → pingpong 服务级 BizCode
-    _status_bizcode_map = {
-        400: BizCode.VALIDATION_FAILED,
-        401: BizCode.AUTH_API_KEY_INVALID,
-        404: BizCode.PAP_NOT_FOUND,
-        409: BizCode.PAP_ALREADY_EXISTS,
-        422: BizCode.VALIDATION_FAILED,
-    }
-
-    def _mapper(http_status: int, exc) -> int:
-        return _status_bizcode_map.get(http_status, BizCode.INTERNAL_ERROR)
-
-    register_service_bizcode_mapper(prefix, _mapper)
-
 
 async def setup(
     _app: FastAPI,
@@ -113,9 +84,6 @@ async def setup(
 
     # 设置全局 Injector
     set_injector(_injector)
-
-    # 注册服务级 BizCode 映射（all-in-one 多服务共用 app 时，异常 handler 按路径前缀路由到本服务的 biz_code）
-    _register_bizcode_mapper(api_prefix)
 
     if owns_redis_manager:
         logger.info(f"Redis connections initialized, service: {_settings.APP_NAME}")
