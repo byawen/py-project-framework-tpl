@@ -6,10 +6,8 @@ from fastapi import APIRouter, Depends
 from pingpong_service.foundation.container import get_injector
 from pingpong_service.app.api.v1.schemas.ping_pong import (
     PingResponse,
-    PingDataResponse,
     PongRequest,
     PongResponse,
-    PongDataResponse,
 )
 from pingpong_service.app.application.queries.get_ping import PingQuery
 from pingpong_service.app.application.queries.biz_code_test import BizCodeTestQuery
@@ -32,10 +30,10 @@ def get_pong_command() -> PongCommand:
     return injector.get(PongCommand)
 
 
-@router.get("/ping", response_model=DataResponse[PingDataResponse])
+@router.get("/ping", response_model=DataResponse[PingResponse])
 async def ping(
     query: PingQuery = Depends(get_ping_query),
-) -> DataResponse[PingDataResponse]:
+) -> DataResponse[PingResponse]:
     """Ping 端点 - 返回 'ping, xxxxxx'"""
     logger.info(f"Pingpong ping requested")
     result = await query.execute()
@@ -47,11 +45,11 @@ async def ping(
     return success(data=ping_data, message="Ping successful")
 
 
-@router.post("/pong", response_model=DataResponse[PongDataResponse])
+@router.post("/pong", response_model=DataResponse[PongResponse])
 async def pong(
     request: PongRequest,
     command: PongCommand = Depends(get_pong_command),
-) -> DataResponse[PongDataResponse]:
+) -> DataResponse[PongResponse]:
     """Pong 端点 - 提交 {"data": "xxxxx"}"""
     logger.info(f"Pingpong pong requested")
     result = await command.execute(request.data)

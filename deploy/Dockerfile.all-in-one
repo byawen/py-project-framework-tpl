@@ -1,0 +1,77 @@
+# All-in-One 镜像
+ARG PYTHON_BASE_IMAGE=python:3.12-slim
+FROM ${PYTHON_BASE_IMAGE}
+
+# 设置环境变量
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/workspace \
+    TZ=Asia/Shanghai
+
+# 安装系统依赖（使用基础镜像自带的源）
+RUN sed -i 's/deb.debian.org/mirrors.tencent.com/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    tzdata \
+    ffmpeg \
+    git && \
+    ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime && \
+    echo ${TZ} > /etc/timezone && \
+    rm -rf /var/lib/apt/lists/*
+
+# 安装 uv（快速的 Python 包管理器）
+RUN pip install --no-cache-dir uv -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+
+# 设置工作目录
+WORKDIR /workspace
+
+# 复制项目根目录的 pyproject.toml（用于 workspace 依赖解析）
+COPY pyproject.toml /workspace/pyproject.toml
+
+# 复制所有服务代码
+COPY services/common /workspace/services/common
+COPY services/pingpong-service /workspace/services/pingpong-service
+
+# 复制 all-in-one 应用
+COPY all-in-one /workspace/all-in-one
+
+# 按依赖顺序安装服务（先安装基础依赖，再安装依赖它们的服务）
+# 先安装 services-common（所有服务的基础依赖）
+RUN uv pip install --system -e ./services/common -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+
+# 安装 pingpong-service（all-in-one 依赖它）
+RUN uv pip install --system -e ./services/pingpong-service -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+
+# 4. 最后安装 all-in-one（依赖上面所有服务）
+RUN uv pip install --system -e ./all-in-one -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+
+# 复制环境配置文件示例到 all-in-one 目录
+# RUN cp /workspace/deploy/env.example /workspace/all-in-one/.env
+
+# 创建必要的目录
+RUN mkdir -p /workspace/uploads /workspace/data /workspace/all-in-one/logs /workspace/all-in-one/static
+
+# 创建非root用户并设置权限
+RUN adduser --disabled-password --gecos '' appuser && \
+    chown -R appuser:appuser /workspace
+
+# 切换到非root用户
+USER appuser
+
+# 切换到 all-in-one 目录
+WORKDIR /workspace/all-in-one
+
+# 暴露端口
+EXPOSE 8001
+
+# 健康检查（给更长的启动时间）
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8001/health || exit 1
+
+# 默认命令 - 配置 workers 和超时以支持长连接和高并发
+CMD ["python", "-m", "uvicorn", "all_in_one.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2", "--loop", "uvloop", "--timeout-keep-alive", "120", "--timeout-graceful-shutdown", "30"]

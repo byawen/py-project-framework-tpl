@@ -78,9 +78,9 @@ class WorkersSettings(BaseSettings):
     service 只需派发不需要消费，故不含 worker_concurrency / prefetch_multiplier 等消费端字段。
     """
 
-    # ── Celery 连接 ──
-    CELERY_BROKER_URL: str = "redis://localhost:6379/4"
-    CELERY_BROKER_RESULT_BACKEND: str = "redis://localhost:6379/5"
+    # ── Celery 连接（与 workers_common 默认一致，保证 service 派发 / worker 消费同库）──
+    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
+    CELERY_BROKER_RESULT_BACKEND: str = "redis://localhost:6379/2"
 
     # ── Celery 序列化 ──
     CELERY_TASK_SERIALIZER: str = "json"
