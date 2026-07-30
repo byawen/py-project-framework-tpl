@@ -23,7 +23,7 @@ class TokenUsage:
     stage: str                      # 阶段标识：knowledge_injection / video_understand / rag_embed / ...
     description: str = ""           # 人类可读描述
     model: str = ""                 # 模型名称
-    provider: str = ""              # 供应商标识（base_url 域名，如 openrouter / siliconflow / zeroone01）
+    provider: str = ""              # 供应商标识（base_url 域名，如 openrouter / siliconflow）
     prompt_tokens: int = 0          # 输入 token（含 system + user）
     completion_tokens: int = 0      # 输出 token
     total_tokens: int = 0           # 总 token

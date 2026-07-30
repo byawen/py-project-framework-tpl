@@ -41,6 +41,7 @@ class BizCode(IntEnum):
     AUTH_TOKEN_BLACKLISTED = make_biz_code(SERVICE_CODE, BizCategory.AUTH, 4)    # token 已被主动注销/拉黑
     AUTH_FAILED = make_biz_code(SERVICE_CODE, BizCategory.AUTH, 5)               # 登录流程中身份验证未通过
     AUTH_NO_PERMISSION = make_biz_code(SERVICE_CODE, BizCategory.AUTH, 6)        # 已认证但无权限访问该资源
+    AUTH_API_KEY_INVALID = make_biz_code(SERVICE_CODE, BizCategory.AUTH, 7)      # 接口访问 API-KEY 缺失或无效（401）
 
     # ── 资源不存在类 ──
     PAP_NOT_FOUND = make_biz_code(SERVICE_CODE, BizCategory.NOT_FOUND, 1)        # PingPong 记录不存在

@@ -15,8 +15,3 @@ class EchoTaskResponse(BaseModel):
     """Echo 任务响应 schema"""
     task_id: str = Field(..., description="Celery 任务 ID")
     message: str = Field(..., description="投递的消息内容")
-
-
-class EchoTaskDataResponse(DataResponse[EchoTaskResponse]):
-    """Echo 任务 DataResponse 包装响应"""
-    pass
