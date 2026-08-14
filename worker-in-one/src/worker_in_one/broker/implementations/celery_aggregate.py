@@ -233,7 +233,7 @@ class CeleryAggregateBroker(AggregateBroker):
         queue_conc = self._parse_queue_concurrency()
         queue_pool = self._parse_queue_pool()
         default_conc = self.settings.CELERY_WORKER_CONCURRENCY
-        default_pool = "prefork"  # 向后兼容：未配置的队列走 prefork
+        default_pool = "threads"  # 未配置的队列走 threads, 进程 prefork
         loglevel = self.settings.CELERY_WORKER_LOGLEVEL
         app_name = self.settings.APP_NAME
         app = self.app  # 确保所有 handler 已注册
