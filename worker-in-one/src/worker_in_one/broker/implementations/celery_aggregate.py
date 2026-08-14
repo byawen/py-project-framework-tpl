@@ -128,6 +128,40 @@ class CeleryAggregateBroker(AggregateBroker):
             _log.warning("CELERY_QUEUE_CONCURRENCY parse failed, using default: %s", e)
         return {}
 
+    def _parse_queue_pool(self) -> dict[str, str]:
+        """解析 CELERY_QUEUE_POOL JSON 配置（方案 D：每队列自选执行池）。
+
+        返回 {queue_name: pool_type}，合法值 threads / prefork / solo。
+        未列出的队列回退 prefork。
+
+        若 CELERY_USE_THREADS_POOL feature flag 为 False（一键回滚），
+        直接返回空 dict → 全部回退 prefork，等价现状。
+        """
+        if not getattr(self.settings, "CELERY_USE_THREADS_POOL", True):
+            _log.info(
+                "CELERY_USE_THREADS_POOL is False — all queues fall back to prefork"
+            )
+            return {}
+        raw = getattr(self.settings, "CELERY_QUEUE_POOL", "") or ""
+        if not raw.strip():
+            return {}
+        valid = {"threads", "prefork", "solo"}
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                result = {
+                    str(k): str(v) for k, v in parsed.items() if str(v) in valid
+                }
+                if result:
+                    _log.info("Per-queue pool override: %s", result)
+                return result
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            _log.warning(
+                "CELERY_QUEUE_POOL parse failed, all queues fall back to prefork: %s",
+                e,
+            )
+        return {}
+
     # ── 注册 worker ──
 
     def register_worker(self, spec: "WorkerSpec") -> None:
@@ -197,7 +231,9 @@ class CeleryAggregateBroker(AggregateBroker):
             return
 
         queue_conc = self._parse_queue_concurrency()
+        queue_pool = self._parse_queue_pool()
         default_conc = self.settings.CELERY_WORKER_CONCURRENCY
+        default_pool = "prefork"  # 向后兼容：未配置的队列走 prefork
         loglevel = self.settings.CELERY_WORKER_LOGLEVEL
         app_name = self.settings.APP_NAME
         app = self.app  # 确保所有 handler 已注册
@@ -226,9 +262,13 @@ class CeleryAggregateBroker(AggregateBroker):
 
         for i, queue in enumerate(self._queues):
             conc = queue_conc.get(queue, default_conc)
+            pool_type = queue_pool.get(queue, default_pool)
             hostname = f"{app_name}@{queue.replace('.', '-')}"
             # 只有第一个队列进程携带 --beat，避免多个 Beat 实例冲突
             beat_flag = ["--beat"] if (use_beat and i == 0) else []
+            # Beat 调度器需稳定运行，强制 prefork（避免 threads 进程退出时丢失调度）
+            if beat_flag:
+                pool_type = "prefork"
             # beat 进程需要显式传 --schedule，命令行优先级高于 app.conf
             if beat_flag:
                 beat_filename = getattr(self.settings, "CELERY_BEAT_SCHEDULE_FILENAME", "celerybeat-schedule")
@@ -242,7 +282,7 @@ class CeleryAggregateBroker(AggregateBroker):
             # 使用默认参数捕获当前迭代的值
             def _run_worker(
                 _app=app, _queue=queue, _conc=conc,
-                _loglevel=loglevel, _hostname=hostname, _beat=beat_flag,
+                _pool=pool_type, _loglevel=loglevel, _hostname=hostname, _beat=beat_flag,
                 _log_file_enabled=log_file_enabled,
                 _log_dir=log_dir,
                 _log_file_max_bytes=log_file_max_bytes,
@@ -254,7 +294,7 @@ class CeleryAggregateBroker(AggregateBroker):
                 print(
                     f"\n{'='*60}\n"
                     f"  Queue Worker starting\n"
-                    f"  queue={_queue}  concurrency={_conc}  hostname={_hostname}{beat_info}\n"
+                    f"  queue={_queue}  pool={_pool}  concurrency={_conc}  hostname={_hostname}{beat_info}\n"
                     f"{'='*60}\n",
                     flush=True,
                 )
@@ -298,12 +338,26 @@ class CeleryAggregateBroker(AggregateBroker):
                             log_file_backup_count=_bc,
                         )
 
+                # ── async bridge 进程级钩子（threads 与 prefork 都注册）──
+                # - threads 队列：worker_shutdown/atexit 关闭本线程 loop + thread-local
+                #   manager，释放池内连接（best-effort）。
+                # - prefork 队列：worker_process_init 信号在每个 pool worker 孙进程 fork
+                #   后触发，重置继承自父进程主线程的 thread-local（loop/manager 缓存），
+                #   防止孙进程复用绑了已关闭 loop 的脏 manager。threads 下该信号不触发，无害。
+                try:
+                    from workers_common.async_bridge import install_shutdown_hook
+
+                    install_shutdown_hook()
+                except Exception:  # noqa: BLE001
+                    pass
+
                 # Celery trace 模块通过 exec() 生成优化 tracer，
                 # 源码字符串会泄露到 stdout。在 worker_main 期间静默 stdout。
                 with open("/dev/null", "w") as _devnull, contextlib.redirect_stdout(_devnull):
                     worker_argv = [
                         "worker",
                         f"--loglevel={_loglevel}",
+                        f"--pool={_pool}",
                         f"--concurrency={_conc}",
                         f"--queues={_queue}",
                         f"--hostname={_hostname}",
@@ -314,19 +368,25 @@ class CeleryAggregateBroker(AggregateBroker):
 
             proc = self._mp_ctx.Process(
                 target=_run_worker,
-                name=f"celery-{queue}",
+                name=f"celery-{queue}-{pool_type}",
                 daemon=True,
             )
             proc.start()
             self._processes.append(proc)
             _log.info(
-                "Queue worker process started: queue=%s, concurrency=%d, hostname=%s, pid=%d",
-                queue, conc, hostname, proc.pid,
+                "Queue worker process started: queue=%s, pool=%s, concurrency=%d, hostname=%s, pid=%d",
+                queue, pool_type, conc, hostname, proc.pid,
             )
 
         _log.info(
             "All queue worker processes started: %s",
-            {q: queue_conc.get(q, default_conc) for q in self._queues},
+            {
+                q: {
+                    "concurrency": queue_conc.get(q, default_conc),
+                    "pool": queue_pool.get(q, default_pool),
+                }
+                for q in self._queues
+            },
         )
 
         self._stop_event.wait()

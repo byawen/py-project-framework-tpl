@@ -3,15 +3,17 @@
 只做四件事：解析 payload → 调度异步 → 调用 application → 组装结果。
 不含业务逻辑。
 
-Celery 同步入口内用 handlers/_loop.py 的 run_async 调度异步（持久 loop），
-禁止 asyncio.run()（会破坏 asyncpg 连接池绑定的 loop）。
+Celery 同步入口内用 workers_common.async_bridge.run_async 在当前工作线程的
+thread-local 持久 loop 上调度异步（Option B）。禁止 asyncio.run()（每任务新建/关
+loop，破坏 asyncpg 连接池绑定的 loop）。
 """
 
 from typing import Any
 
+from workers_common.async_bridge import run_async
+
 from pingpong_worker.foundation.container import get_injector
 from pingpong_worker.foundation.logging import get_logger
-from pingpong_worker.handlers._loop import run_async
 from pingpong_worker.handlers.schemas import EchoTaskPayload, EchoTaskResult
 
 logger = get_logger(__name__)

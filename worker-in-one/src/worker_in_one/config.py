@@ -47,12 +47,23 @@ class Settings(
     # ============================================
     APP_NAME: str = "worker-in-one"
     MODEL: str = "worker-in-one"
-    WORKER_IN_ONE_SHARE_DB: bool = True
-    WORKER_IN_ONE_SHARE_REDIS: bool = True
-    CELERY_QUEUE_CONCURRENCY: str = (
-        '{"pingpong_worker.test.ping":2,'
-        '"pingpong_worker.beat_demo":1}'
-    )
+    # 已改用 thread_resources 方式，后续需要再配置打开
+    WORKER_IN_ONE_SHARE_DB: bool = False
+    WORKER_IN_ONE_SHARE_REDIS: bool = False
+    CELERY_QUEUE_CONCURRENCY: str = ''
+
+    # ── per-queue 执行池类型覆盖（方案 D）──
+    # JSON dict: {"queue_name": "threads" | "prefork" | "solo"}
+    # 默认空 = 全部 prefork（等价现状，向后兼容），灰度靠 env 注入。
+    # 配合 CELERY_USE_THREADS_POOL feature flag 使用。
+    CELERY_QUEUE_POOL: str = ""
+    # feature flag：false 时忽略 CELERY_QUEUE_POOL，全部回退 prefork（一键回滚）。
+    CELERY_USE_THREADS_POOL: bool = True
+
+    # 聚合部署下，新 Worker 与 content-ops-worker 均通过 all-in-one HTTP 入口访问服务。
+    COPSW_DATA_COLLECTOR_SERVICE_URL: str = "http://localhost:8002"
+    DCOLW_DATA_COLLECTOR_SERVICE_URL: str = "http://localhost:8002"
+    DCOLW_ASSET_SERVICE_URL: str = "http://localhost:8002"
 
     # ============================================
     # Worker 特定配置

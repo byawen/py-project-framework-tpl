@@ -23,16 +23,18 @@ class TokenUsage:
     stage: str                      # 阶段标识：knowledge_injection / video_understand / rag_embed / ...
     description: str = ""           # 人类可读描述
     model: str = ""                 # 模型名称
-    provider: str = ""              # 供应商标识（base_url 域名，如 openrouter / siliconflow）
+    provider: str = ""              # 供应商标识（base_url 域名，如 openrouter / siliconflow / zeroone01）
     prompt_tokens: int = 0          # 输入 token（含 system + user）
-    completion_tokens: int = 0      # 输出 token
-    total_tokens: int = 0           # 总 token
+    completion_tokens: int = 0      # 输出 token（含 reasoning_tokens）
+    reasoning_tokens: int = 0       # 推理思考 token（completion_tokens 的子集）
+    total_tokens: int = 0           # 总 token = prompt_tokens + completion_tokens
 
     def to_dict(self) -> dict:
         d = asdict(self)
         # 兼容外部期望字段名：input_tokens = prompt_tokens
         d["input_tokens"] = self.prompt_tokens
         d["output_tokens"] = self.completion_tokens
+        d["reasoning_tokens"] = self.reasoning_tokens
         return d
 
     @classmethod
@@ -44,6 +46,7 @@ class TokenUsage:
             provider=d.get("provider", ""),
             prompt_tokens=d.get("prompt_tokens") or d.get("input_tokens", 0),
             completion_tokens=d.get("completion_tokens") or d.get("output_tokens", 0),
+            reasoning_tokens=d.get("reasoning_tokens", 0),
             total_tokens=d.get("total_tokens", 0),
         )
 
@@ -101,6 +104,14 @@ def extract_usage_from_response(
     if not total_tokens:
         return None
 
+    # reasoning_tokens: completion_tokens 的子集，从 completion_tokens_details 提取
+    completion_details = usage.get("completion_tokens_details") or {}
+    reasoning_tokens = (
+        completion_details.get("reasoning_tokens")
+        or usage.get("reasoning_tokens")  # 部分平台直接平铺
+        or 0
+    )
+
     return TokenUsage(
         stage=stage,
         description=description,
@@ -108,6 +119,7 @@ def extract_usage_from_response(
         provider=provider,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        reasoning_tokens=reasoning_tokens,
         total_tokens=total_tokens,
     )
 
@@ -192,6 +204,7 @@ def merge_usage_tokens(
             cur = by_stage[stage]
             cur["prompt_tokens"] = cur.get("prompt_tokens", 0) + entry.get("prompt_tokens", 0)
             cur["completion_tokens"] = cur.get("completion_tokens", 0) + entry.get("completion_tokens", 0)
+            cur["reasoning_tokens"] = cur.get("reasoning_tokens", 0) + entry.get("reasoning_tokens", 0)
             cur["total_tokens"] = cur.get("total_tokens", 0) + entry.get("total_tokens", 0)
             cur["input_tokens"] = cur["prompt_tokens"]
             cur["output_tokens"] = cur["completion_tokens"]

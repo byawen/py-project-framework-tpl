@@ -110,6 +110,23 @@ class WorkersSettings(BaseSettings):
     # worker-in-one 模式下每个队列启动独立 WorkController 消费线程
     CELERY_QUEUE_CONCURRENCY: str = ""
 
+    # ── Celery per-queue 执行池类型覆盖 ──
+    # JSON dict: {"queue_name": "threads" | "prefork" | "solo"}
+    # 未列出的队列回退到 prefork（默认，向后兼容）。
+    # - threads: 线程池，省进程、IO bound 队列适用；配合 async_bridge 的
+    #   thread-local loop + thread-local 连接池（见 *_PER_THREAD 配置）。
+    # - prefork: 进程池（默认），CPU 密集队列适用，绕开 GIL 真并行。
+    # feature flag CELERY_USE_THREADS_POOL=false 时本配置被忽略，全部回退 prefork。
+    CELERY_QUEUE_POOL: str = ""
+
+    # ── threads 池：每工作线程连接池上限 ──
+    # threads 队列进程内每个工作线程拥有独立 loop + 独立 DB/Redis manager，
+    # 池绑本线程 loop。小常驻池 + 溢出用完即释放，兼顾复用与峰值收敛。
+    # 高并发（>10）需前置 pgbouncer transaction pooling 收敛后端真实连接。
+    DB_POOL_SIZE_PER_THREAD: int = 5
+    DB_MAX_OVERFLOW_PER_THREAD: int = 10
+    REDIS_MAX_CONNECTIONS_PER_THREAD: int = 8
+
     # ── Celery 超时 ──
     CELERY_TASK_TIME_LIMIT: int = 600
     CELERY_TASK_SOFT_TIME_LIMIT: int = 540

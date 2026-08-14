@@ -68,6 +68,7 @@ async def workers_registry(_settings: Settings, logger: Logger) -> tuple[list[Wo
     # ============================================
     # 加载 worker
     # ============================================
+
     try:
         from pingpong_worker.main import setup as pingpong_worker_setup
         from pingpong_worker.handlers import register_all_handlers as pingpong_register
@@ -86,7 +87,6 @@ async def workers_registry(_settings: Settings, logger: Logger) -> tuple[list[Wo
     except Exception as e:
         logger.warning(f">>>>>>> Failed to load pingpong-worker exception: {e}")
         logger.warning(f">>>>>>> Failed to load pingpong-worker stack: {traceback.format_exc()}")
-
 
     # 新增 worker 在此添加:
     # try:

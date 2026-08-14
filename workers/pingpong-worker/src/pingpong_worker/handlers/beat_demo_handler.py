@@ -22,7 +22,7 @@ from typing import Any
 
 from pingpong_worker.foundation.container import get_injector
 from pingpong_worker.foundation.logging import get_logger
-from pingpong_worker.handlers._loop import run_async as _run_async
+from workers_common.async_bridge import run_async as _run_async
 
 logger = get_logger(__name__)
 

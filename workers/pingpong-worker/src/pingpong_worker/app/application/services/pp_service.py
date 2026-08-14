@@ -57,14 +57,14 @@ class PPService:
     async def create_ping(self, message: str) -> Ping:
         """创建 Ping"""
         ping_message = PingMessage(message)
-        ping = Ping(ping_id=generate_id(), message=ping_message.value)
+        ping = Ping(message=ping_message)
         return await self.ping_repo.create(ping)
 
     async def update_ping(self, ping_id: str, message: str) -> Optional[Ping]:
         """更新 Ping"""
         ping = await self.ping_repo.get_by_id(ping_id)
         if ping:
-            ping.message = PingMessage(message).value
+            ping.message = PingMessage(message)
             return await self.ping_repo.update(ping)
         return None
 
@@ -81,15 +81,14 @@ class PPService:
     async def create_pong(self, data: str) -> Pong:
         """创建 Pong"""
         pong_data = PongData(data)
-        # entity 字段为 str；值对象只做校验，写入时取 .value（与 service 侧 create_pong 一致）
-        pong = Pong(pong_id=generate_id(), data=pong_data.value)
+        pong = Pong(pong_id=generate_id(), data=pong_data)
         return await self.pong_repo.create(pong)
 
     async def update_pong(self, pong_id: str, data: str) -> Optional[Pong]:
         """更新 Pong"""
         pong = await self.pong_repo.get_by_id(pong_id)
         if pong:
-            pong.data = PongData(data).value
+            pong.data = PongData(data)
             return await self.pong_repo.update(pong)
         return None
 
