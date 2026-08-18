@@ -18,7 +18,7 @@
 | 端口 | 有 `PORT` | **无端口**，由 broker 拉取任务驱动 |
 | 启动入口 | uvicorn / FastAPI app | `run_worker()` → `BrokerManager.start_all()` |
 | 配置基类 | `services_common.config`（含 HOST/PORT/CORS） | `workers_common`（`WorkersSettings`，无 Web 字段） |
-| 运行并发 | ASGI 协程 | Celery prefork 进程，handler 同步入口内用 `run_async()`（持久 loop，见 §4.1） |
+| 运行并发 | ASGI 协程 | Celery `--pool=threads`（或 prefork），handler 同步入口内用 `workers_common.async_bridge.run_async()`（工作线程 thread-local 持久 loop，见 §4.1） |
 
 > **核心心智模型**：把 worker 的 `handlers/` 当作 service 的 `api/endpoints/` 的等价物——它是入口适配层，只做"解析 payload → 调用 application → 返回结果"，**不写业务逻辑**。
 
@@ -66,9 +66,9 @@ worker 的占位符推导来源：`worker_name` 与 `worker_prefix`（无 `servi
 - `app/infrastructure/` 的 `persistence/models/{ping,pong}_model.py`、`persistence/repositories/sql_{ping,pong}_repository.py`、`caches/pp_redis_cache.py`、`security/password.py`，`infrastructure/modules.py` 同步移除对应 `binder.bind`
 
 **必须保留**（worker 基础设施，勿删）：
-- `handlers/_loop.py`（持久 loop，§4.1 必备）
 - `handlers/schemas.py`（若无则按 §4.2 新建）
 - `foundation/{config,container,logging}.py`（改值不删文件）
+- async 调度无需本地文件：`run_async` 来自 `workers_common.async_bridge`（§4.1），worker 本地**不应有** `_loop.py`
 
 改前缀（`pipo`/`PIPO` → 本 worker 前缀）：
 - `foundation/config.py`：`REDIS_PREFIX`、`PIPO_CELERY_*` 字段名与值、`PIPO_CELERY_BEAT_SCHEDULE`（若有）
@@ -113,8 +113,9 @@ worker 的占位符推导来源：`worker_name` 与 `worker_prefix`（无 `servi
 │       ├── handlers/                       # 【Worker 特有】任务处理器（入口层）
 │       │   ├── __init__.py                 # 导出 register_all_handlers
 │       │   ├── registry.py                 # 集中注册 topic → handler
-│       │   ├── _loop.py                    # 持久 event loop（run_async，必备，见 §4.1）
 │       │   ├── schemas.py                  # handler 专用 payload/result 模型（必备，见 §4.2）
+│       │   # 注：async 调度统一用 workers_common.async_bridge.run_async（见 §4.1），
+│       │   # worker 本地不再有 _loop.py —— 持久 loop 实现收敛在通用层
 │       │   ├── {域}_handler.py             # 消费型任务处理器（一类任务一文件）
 │       │   └── {域}_beat_handler.py        # Beat 定时任务处理器（按需，见 §4.5）
 │       ├── clients/                        # 与 service 一致
@@ -227,11 +228,18 @@ def create_broker(settings=None, *, broker_type="celery", config=None) -> "BaseB
 
 - 一类任务一个文件：`handlers/{域}_handler.py`（消费型）或 `{域}_beat_handler.py`（Beat 定时，见 §4.5）。
 - Celery handler 是**同步函数**（`def handle_xxx(self, ...)`，`bind=True` 故首参为 `self`）。
-- **统一用 `handlers/_loop.py` 的 `run_async()` 调度异步**，**禁止** `asyncio.run()`。
+- **统一用 `workers_common.async_bridge.run_async()` 调度异步**，**禁止** `asyncio.run()`。
 
-⚠️ **为什么禁止 `asyncio.run`（关键运行时陷阱）**：Celery 在同步 prefork 进程执行 handler；`asyncio.run()` 每次创建并关闭一个新 event loop，而 `DatabaseManager` 的 `asyncpg` 连接池**会绑定到创建它的 loop**。loop 关闭后连接池失效，下一个任务再 `asyncio.run` 会触发"连接池绑定到已关闭 loop"的运行时崩溃。`_loop.py` 用一个后台线程跑**持久 loop**，所有 async 调用经 `run_coroutine_threadsafe` 提交到同一 loop，连接池复用不失效。
+⚠️ **为什么禁止 `asyncio.run`（关键运行时陷阱）**：Celery 在同步 prefork 进程执行 handler；`asyncio.run()` 每次创建并关闭一个新 event loop，而 `DatabaseManager` 的 `asyncpg` 连接池**会绑定到创建它的 loop**。loop 关闭后连接池失效，下一个任务再 `asyncio.run` 会触发"连接池绑定到已关闭 loop"的运行时崩溃。`async_bridge` 用**当前工作线程的 thread-local 持久 loop**：`run_async` 直接在工作线程上 `loop.run_until_complete(coro)`，loop 创建一次、**跨任务复用、不关闭**，asyncpg/redis.asyncio 连接池绑一次即持续有效。
 
-`handlers/_loop.py` 是 worker **必备文件**（脚手架已自带，**不要删、不要改实现**），只暴露两个函数：`get_persistent_loop()`、`run_async(coro)`。
+`run_async` 的实现收敛在通用层 `workers_common.async_bridge`（**不是 worker 本地文件**），`from workers_common.async_bridge import run_async` 即可。**不要自实现 `run_async`、不要在 worker 本地建 `_loop.py`**。该模块的实现要点（无需仿写，理解即可）：
+- **thread-local 持久 loop**：每个工作线程惰性建一个 `asyncio` loop 并复用；Celery threads pool「一个工作线程同时只跑一个任务」，故同一 loop 不会并发 `run_until_complete`，历史上「module-global loop 多线程共享 → This event loop is already running」的崩溃不再发生。
+- **直接驱动，无后台线程**：在拥有该 loop 的工作线程上 `run_until_complete`，而非后台 `run_forever` + `run_coroutine_threadsafe`（后者若无 driver 线程会永久挂死）。`contextvars.copy_context()` 给每个任务上下文隔离，in-task 写不会泄漏给同线程下一个任务。
+- **禁重入**：`run_async` 只能在同步入口（handler 顶层）调用；在 coroutine 内再调 `run_async` 会抛 `RuntimeError`（重入会死锁）。
+- **双模兼容**：同一 `run_async` 在 `--pool=threads`（thread-local loop）和 prefork（单线程驱动、退化为「每进程一个 loop」）下都正确，无回归。
+- **禁止跨调用泄漏后台任务**：任何 `asyncio.create_task` 必须在顶层 coroutine 返回前 await 或 cancel——worker 代码满足此约束（`RedisWorkerLock` 的 backgrouund renew 只在 FastAPI 服务的 uvicorn loop 上用，不进 worker）。
+
+> 生命周期钩子（`install_shutdown_hook` / `dispose_thread_loop`）在 worker `setup()` 里由通用层注册，handler 层无需关心，见 §5。
 
 ```python
 # handlers/{域}_handler.py  —— 消费型 handler 标准形态
@@ -239,7 +247,7 @@ from typing import Any
 
 from {pkg}.foundation.container import get_injector
 from {pkg}.foundation.logging import get_logger
-from {pkg}.handlers._loop import run_async
+from workers_common.async_bridge import run_async
 from {pkg}.handlers.schemas import XxxPayload, XxxResult
 
 logger = get_logger(__name__)
@@ -267,7 +275,7 @@ async def _async_handle_xxx(raw: dict[str, Any]) -> dict[str, Any]:
     return XxxResult(xxx_id=result.xxx.id).model_dump()      # ✅ 返回模型 .model_dump()，不手拼 dict
 ```
 
-> ⚠️ **模板偏差声明**：`pingpong-worker` 的 `handlers/pp_demo.py` 用了 `asyncio.run()` 且手拼 dict 返回、未走 `handlers/schemas.py`——这是**待修脏模板**，**不得仿写**。新 handler 必须用 `run_async` + `schemas.py` 模型。`beat_demo_handler.py` 已经是正确形态（用 `run_async`），可作 Beat 参考（见 §4.5）。
+> ⚠️ **模板偏差声明**：`pingpong-worker` 的 `handlers/pp_demo.py` 已改为用 `run_async`（async 调度正确），但仍手拼 dict 返回、未走 `handlers/schemas.py`——**返回部分不得仿写**。新 handler 必须用 `run_async` + `schemas.py` 模型（`.model_dump()` 返回）。正确形态参考 `echo_task_handler.py` 与 `beat_demo_handler.py`（均 `from workers_common.async_bridge import run_async`，见 §4.5）。
 
 ### 4.2 Payload 与返回值的数据载体（必须模型化）
 
@@ -398,7 +406,7 @@ from typing import Any
 
 from {pkg}.foundation.container import get_injector
 from {pkg}.foundation.logging import get_logger
-from {pkg}.handlers._loop import run_async as _run_async
+from workers_common.async_bridge import run_async as _run_async
 
 logger = get_logger(__name__)
 
@@ -452,7 +460,9 @@ worker 的 `main.py` 承担 service 中"app 工厂 + 容器装配"的角色：
 
 - `setup()`：装配 `DatabaseManager` / `RedisManager`（支持 worker-in-one 复用 `SharedResources`）、构建 `Injector`（`BuiltinModule + ClientsModule + DomainModule + ApplicationModule + InfrastructureModule`）、`set_injector`，返回 `cleaner`。
 - `run_worker()`：`configure_logging` → `asyncio.run(setup(...))` → 前缀覆盖 `CELERY_*` → `BrokerManager().register("celery", settings)` → `manager.start_all()`。
-- **all-in-one / worker-in-one 复用**：当传入 `shared_resources` 时，复用其 DB/Redis，不重复创建、不重复关闭（`owns_*` 判定）。
+- **`async_bridge` 生命周期钩子**：`setup()` 内调用 `install_shutdown_hook()`（幂等），把 `dispose_thread_loop` 挂到 Celery `worker_shutdown` 信号 + `atexit`，把 `reset_thread_local` 挂到 `worker_process_init`（prefork 二次 fork 后清掉继承的父线程 loop/资源缓存，`--pool=threads` 下为 no-op）。`cleaner` 里再 `dispose_thread_loop()` 释放主线程 thread-local 资源。handler 层无需关心这些钩子，只需 `from workers_common.async_bridge import run_async`。
+- **thread-local 资源装配（`--pool=threads` 适配）**：`DatabaseManager`/`RedisManager` 不再绑成进程级单例——单例 manager 的连接池会绑定到首个工作线程的 loop，其余线程复用即跨 loop 崩。`setup()` 用 `workers_common.thread_resources` 的 provider（`get_or_create_db_manager` / `get_or_create_redis_manager`）按 `scope=None` 绑定，每次 `injector.get` 取**当前工作线程**惰性创建的 manager（池绑本线程 loop）。thread-local 在 prefork 下退化为「每进程一份」，无回归。
+- **all-in-one / worker-in-one 复用**：standalone 模式 `install_shutdown_hook()` 在 `setup()` 覆盖；worker-in-one 模式下队列子进程也会再注册一次（幂等）。DB/Redis 一律走 thread-local provider，忽略 `shared_resources` 传入的进程级共享 manager（共享 manager 为 prefork 单例设计，threads 下不安全）。
 
 > DI 容器、`get_injector`/`set_injector`、各层 `modules.py` 注册规则与 service 规范 §6 完全一致。
 
@@ -705,7 +715,7 @@ from typing import Any
 
 from pingpong_worker.foundation.container import get_injector
 from pingpong_worker.foundation.logging import get_logger
-from pingpong_worker.handlers._loop import run_async
+from workers_common.async_bridge import run_async
 from pingpong_worker.handlers.schemas import NotifyPayload, NotifyResult
 
 logger = get_logger(__name__)
