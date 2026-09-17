@@ -22,6 +22,11 @@
 
 > **核心心智模型**：把 worker 的 `handlers/` 当作 service 的 `api/endpoints/` 的等价物——它是入口适配层，只做"解析 payload → 调用 application → 返回结果"，**不写业务逻辑**。
 
+> ⚠️ **幂等控制 / 请求标识不适用于 Worker**：
+> - `@idempotent` 是 `services_common` 提供的 **FastAPI 路由装饰器**，Worker **无 HTTP 端口**，没有路由可装饰。且 `workers_common` **禁止依赖 `services_common`**（领域边界隔离，见 §7）。故 Worker **不得**使用 `@idempotent`。
+> - Worker 的任务去重靠 Celery `acks_late` + 业务层幂等键（如 content-quality 的 `idempotency_key` 唯一约束），不靠这个装饰器。
+> - `X-Request-ID` / `X-Trace-ID` 由 service 侧 `RequestIDMiddleware` 处理。Worker 回调 service 时（HTTP callback），若需保持链路 trace_id 连续，应在 callback 请求头里带上从任务 payload 透传的 `X-Trace-ID`（见 §7）。
+
 ## 0.1 占位符与命名推导（与 service 规范 §0.1 同源）
 
 worker 的占位符推导来源：`worker_name` 与 `worker_prefix`（无 `service_code`/`port`）。
@@ -558,6 +563,18 @@ NTF_CELERY_BEAT_SCHEDULE: dict = {
 - worker 间共享逻辑放 `workers/common`（`workers_common`），如 worker 专用 config、resource_keys、shared_resources 等。
 - **`workers_common.broker`**：Broker 抽象基类（`BaseBroker`）、工厂（`create_broker`）、管理器（`BrokerManager`）、注册表（`BROKER_REGISTRY`）、实现（`CeleryBroker` 等）。统一在通用层，**各 worker 本地不建 `broker/` 目录**，直接 `from workers_common.broker import BrokerManager`。
 - 不要在单个 worker 内重复实现 `workers_common` 已提供的能力。
+- **幂等控制 / 请求标识不适用于 Worker**：`@idempotent`、`X-Request-ID` / `X-Trace-ID` 中间件均在 `services_common`，Worker 不得使用（无 HTTP 端口 + 禁止依赖 `services_common`）。Worker 回调 service 时若需保持 trace_id 链路连续，从任务 payload 取 trace_id 放入 callback 请求头 `X-Trace-ID` 即可（见下）。
+
+> **Worker 回调 service 时透传 `X-Trace-ID`**（可选但推荐）：service 投递任务时把当前 `trace_id` 写入 payload；worker 执行完回调 service 时，从 payload 取出放入 HTTP 请求头，保持链路连续：
+> ```python
+> # worker 回调 service 的 client 里
+> trace_id = payload.get("trace_id", "")
+> headers = {"X-API-KEY": api_key}
+> if trace_id:
+>     headers["X-Trace-ID"] = trace_id
+> resp = await client.post(callback_url, headers=headers, json=result)
+> ```
+> 注意：worker 侧**不得** `from services_common._context import get_trace_id`（违反隔离），只能从 payload 取。
 
 > 为什么硬性禁止 import `services_common`？因为 `services_common` 可能带 FastAPI/Web 依赖，而 worker 无 HTTP。保持 worker 依赖树干净，且 service/worker 是两条独立部署线。worker 需要 service 能力时走 `clients/` HTTP 调用，不直接 import service 代码。
 
@@ -598,7 +615,7 @@ NTF_CELERY_BEAT_SCHEDULE: dict = {
 5. ❌ 新增 handler 忘记在 `registry.py` 注册。
 6. ❌ worker 里出现 HTTP 端口 / FastAPI / 路由相关代码。
 7. ❌ worker-in-one 模式下重复创建/关闭已由 `SharedResources` 提供的 DB/Redis。
-8. ❌ **`workers/` 下任何文件 `import services_common`**：worker 共享层是 `workers_common`（见 §7）。
+8. ❌ **`workers/` 下任何文件 `import services_common`**：worker 共享层是 `workers_common`（见 §7）。含 `@idempotent`、`get_request_id`/`get_trace_id` 等 —— Worker 不得使用这些 service 侧设施。
 9. ❌ **外部服务调用写进 `infrastructure/`**：调别的 service/第三方只能在 `clients/`；`infrastructure/` 只适配本 worker 执行元数据库。`infrastructure/` 出现 `httpx` 即不合格（与 service §2.1 同）。
 10. ❌ **`modules.py` 顶层 import 业务类 / 缺 `scope=None` / `DomainModule` 里塞绑定**：照 service §6.1.1 四条硬约定。
 11. ❌ **重命名脚手架生成的目录或顶层包**：`generate-worker` 后包名/前缀/import 根已正确，AI 不得改名（见 §0.1）。

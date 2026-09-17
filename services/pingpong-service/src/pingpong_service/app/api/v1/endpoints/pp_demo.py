@@ -14,6 +14,7 @@ from pingpong_service.app.application.queries.biz_code_test import BizCodeTestQu
 from pingpong_service.app.application.commands.create_pong import PongCommand
 from pingpong_service.foundation.logging import get_logger
 from services_common.response import success, DataResponse
+from pingpong_service.foundation.biz_code import BizCode
 
 router = APIRouter(prefix="/ping-pong", tags=["ping-pong"])
 logger = get_logger(__name__)
@@ -42,7 +43,7 @@ async def ping(
         ping_id=result.ping.ping_id if result.ping else None,
         created_at=result.ping.created_at if result.ping else None,
     )
-    return success(data=ping_data, message="Ping successful")
+    return success(data=ping_data, message="Ping successful", biz_code=BizCode.SUCCESS)
 
 
 @router.post("/pong", response_model=DataResponse[PongResponse])
@@ -58,7 +59,7 @@ async def pong(
         pong_id=result.pong.pong_id if result.pong else None,
         created_at=result.pong.created_at if result.pong else None,
     )
-    return success(data=pong_data, message="Pong created successfully")
+    return success(data=pong_data, message="Pong created successfully", biz_code=BizCode.SUCCESS)
 
 
 def get_biz_code_test_query() -> BizCodeTestQuery:

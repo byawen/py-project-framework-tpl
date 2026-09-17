@@ -2,7 +2,7 @@
 
 biz_code 为 8 位整数，结构: 1 SS DDD EEE
   1    = 固定前缀（保证始终 8 位数）
-  SS   = 服务编号 (00-89)，由 generate-service 脚本分配并写入 service.metadata
+  SS   = 服务编号 (10-99)，由 generate-service 脚本分配并写入 service.metadata
   DDD  = 业务大类 (BizCategory 枚举值)
   EEE  = 业务序号 (001-999, 0=成功)
 
@@ -14,9 +14,8 @@ from enum import IntEnum
 
 from services_common.biz_code import BizCategory, make_biz_code
 
-# 服务编号 - 由 generate-service 脚本在创建服务时自动替换
-# pingpong 是服务模板，使用 0 作为占位符（非实际服务编号）
-SERVICE_CODE = 0
+# 服务编号 - pingpong-service
+SERVICE_CODE = 99
 
 
 class BizCode(IntEnum):

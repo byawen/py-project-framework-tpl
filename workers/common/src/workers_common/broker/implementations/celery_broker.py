@@ -98,6 +98,11 @@ class CeleryBroker(BaseBroker):
                 worker_concurrency=_get(c, "CELERY_WORKER_CONCURRENCY", 4),
                 worker_loglevel=_get(c, "CELERY_WORKER_LOGLEVEL", "info"),
                 worker_prefetch_multiplier=_get(c, "CELERY_WORKER_PREFETCH_MULTIPLIER", 1),
+                # Redis broker visibility_timeout，必须 > 最长 task time_limit，
+                # 否则长任务还在跑就被 Redis 重投给另一 worker，占多个并发槽
+                broker_transport_options={
+                    "visibility_timeout": _get(c, "CELERY_BROKER_VISIBILITY_TIMEOUT_S", 3600)
+                },
                 # 超时
                 task_time_limit=_get(c, "CELERY_TASK_TIME_LIMIT", 600),
                 task_soft_time_limit=_get(c, "CELERY_TASK_SOFT_TIME_LIMIT", 540),
@@ -105,10 +110,24 @@ class CeleryBroker(BaseBroker):
                 task_track_started=True,
                 task_acks_late=_get(c, "CELERY_TASK_ACKS_LATE", True),
                 task_reject_on_worker_lost=_get(c, "CELERY_TASK_REJECT_ON_WORKER_LOST", True),
+                # Worker 回收：每执行 N 个任务或 RSS 超 KB 上限后自动重启子进程，
+                # 释放 Python GC 碎片 / SQLAlchemy 内部缓存 / 线程局部连接池等累积内存
+                worker_max_tasks_per_child=_get(c, "CELERY_WORKER_MAX_TASKS_PER_CHILD", 50),
+                worker_max_memory_per_child=_get(c, "CELERY_WORKER_MAX_MEMORY_PER_CHILD", 2_000_000),
                 # 不让 Celery 劫持 root logger，避免自定义日志被降级为 WARNING
                 worker_hijack_root_logger=False,
                 # Beat 持久化文件路径（避免在项目根目录生成 celerybeat-schedule）
                 beat_schedule_filename=_get(c, "CELERY_BEAT_SCHEDULE_FILENAME", "celerybeat-schedule"),
+                # ── 禁用 pidbox 远程控制面（多 SAE 应用共用 broker 必需）──
+                # 共用 CELERY_BROKER_URL 时 pidbox 控制面合一，任一 control.shutdown()
+                # 广播（PreStop / 旧代码 / 滚动重启）会级联杀全部应用的 worker
+                # （`Got shutdown from remote`）。禁用后 worker 不消费 pidbox 控制命令，
+                # 广播无处落地，且消灭 mingle 跨应用噪声。停 worker 靠 SIGTERM→stop()
+                # 的 destination 精确目标 / 本地 terminate，active 指标走本地内存直读，
+                # 跨应用投递靠 send_task（broker 队列），均不依赖 pidbox。
+                worker_enable_remote_control=False,
+                worker_mingle=False,
+                worker_gossip=False,
             )
         return self._app
 
@@ -190,10 +209,21 @@ class CeleryBroker(BaseBroker):
         if not queues:
             routes = _get(self._config, "CELERY_TASK_ROUTES", None) or {}
             default_queue = _get(self._config, "CELERY_TASK_DEFAULT_QUEUE", "default")
-            queue_set = {default_queue}
+            queue_set = {default_queue} if default_queue else set()
             for route in routes.values():
-                if isinstance(route, dict) and route.get("queue"):
+                if not isinstance(route, dict):
+                    continue
+                # queue：本 task 默认路由队列
+                if route.get("queue"):
                     queue_set.add(route["queue"])
+                # queues：本 task 额外服务的物理车道（同一 handler 多队列消费），
+                # 逗号分隔，逐一附加（CELERY_TASK_QUEUES 留空时由此派生提取）
+                extra = route.get("queues", "")
+                if isinstance(extra, str) and extra:
+                    for q in extra.split(","):
+                        q = q.strip()
+                        if q:
+                            queue_set.add(q)
             queues = ",".join(sorted(queue_set))
         queue_args = f"--queues={queues}" if queues else ""
 
@@ -219,8 +249,19 @@ class CeleryBroker(BaseBroker):
         self.app.worker_main(worker_argv)
 
     def stop(self) -> None:
-        """停止 Celery Worker"""
-        self.app.control.shutdown()
+        """停止 Celery Worker（仅本 pod，不广播到共享 broker 上的其它应用/pod）。
+
+        control.shutdown() 不带 destination 是 pidbox 广播，会打到共享
+        CELERY_BROKER_URL 上的全部 worker（多 SAE 应用共用 broker 时一次缩容就级联杀全场）。
+        本 broker 未设 --hostname，nodename 为默认 celery@<hostname>，按本机 hostname
+        精确 destination，仅停本 pod 的 worker。
+        """
+        import socket
+
+        try:
+            self.app.control.shutdown(destination=[f"celery@{socket.gethostname()}"])
+        except Exception:  # noqa: BLE001
+            pass
 
     def send_task(self, topic: str, payload: dict[str, Any], **kwargs) -> Any:
         """发送 Celery 任务

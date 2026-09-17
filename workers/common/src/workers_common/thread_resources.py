@@ -79,11 +79,29 @@ def _reset_registry() -> None:
     _store.registry = {}
 
 
+class DBDisabledError(RuntimeError):
+    """该 worker 的 DB 池已被 DB_ENABLED=False 关闭。仅 DB-FREE worker 可关。
+
+    DB-HEAVY worker 误关会在首次 ``injector.get(DatabaseManager)`` 时抛此错 fail-fast，
+    避免静默 None 潜伏成 NPE。
+    """
+
+
+class RedisDisabledError(RuntimeError):
+    """该 worker 的 Redis 池已被 REDIS_ENABLED=False 关闭。仅 Redis-FREE worker 可关。"""
+
+
 def get_or_create_db_manager(settings: Any):
     """Return this thread's ``DatabaseManager`` (small pool, overflow released).
 
     Bound to this thread's loop via :func:`workers_common.async_bridge.get_thread_loop`.
+    DB_ENABLED=False 时 fail-fast 抛 DBDisabledError，不建池（仅 DB-FREE worker 可关）。
     """
+    if not getattr(settings, "DB_ENABLED", True):
+        raise DBDisabledError(
+            f"DB disabled for worker (DB_ENABLED=False). "
+            f"Only DB-FREE workers may set this. Worker: {getattr(settings, 'APP_NAME', '?')}"
+        )
     from workers_common.database import DatabaseManager
 
     return get_or_create(
@@ -93,12 +111,21 @@ def get_or_create_db_manager(settings: Any):
             pool_size=getattr(settings, "DB_POOL_SIZE_PER_THREAD", 5),
             max_overflow=getattr(settings, "DB_MAX_OVERFLOW_PER_THREAD", 10),
             echo=settings.DB_ECHO,
+            statement_timeout_ms=getattr(settings, "DB_STATEMENT_TIMEOUT_MS", 300000),
         ),
     )
 
 
 def get_or_create_redis_manager(settings: Any):
-    """Return this thread's ``RedisManager`` (small pool)."""
+    """Return this thread's ``RedisManager`` (small pool).
+
+    REDIS_ENABLED=False 时 fail-fast 抛 RedisDisabledError，不建池。
+    """
+    if not getattr(settings, "REDIS_ENABLED", True):
+        raise RedisDisabledError(
+            f"Redis disabled for worker (REDIS_ENABLED=False). "
+            f"Only Redis-FREE workers may set this. Worker: {getattr(settings, 'APP_NAME', '?')}"
+        )
     from workers_common.redis import RedisManager
 
     return get_or_create(

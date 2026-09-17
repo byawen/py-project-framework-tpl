@@ -12,6 +12,7 @@ from pingpong_service.app.api.v1.schemas.echo_task import (
     EchoTaskResponse,
 )
 from pingpong_service.app.application.commands.dispatch_echo_task import DispatchEchoTaskCommand
+from pingpong_service.foundation.biz_code import BizCode
 
 router = APIRouter(prefix="/echo-task", tags=["echo-task"])
 logger = get_logger(__name__)
@@ -34,4 +35,4 @@ async def dispatch_echo_task(
         task_id=result.task_id,
         message=result.message,
     )
-    return success(data=response_data, message="Echo task dispatched")
+    return success(data=response_data, message="Echo task dispatched", biz_code=BizCode.SUCCESS)

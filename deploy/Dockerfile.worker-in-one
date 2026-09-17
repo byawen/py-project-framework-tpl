@@ -11,6 +11,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/workspace \
     TZ=Asia/Shanghai
 
+# 安装系统依赖（ffmpeg 用于视频处理）
+RUN sed -i 's/deb.debian.org/mirrors.tencent.com/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    tzdata \
+    ffmpeg \
+    git && \
+    ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime && \
+    echo ${TZ} > /etc/timezone && \
+    rm -rf /var/lib/apt/lists/*
+
 # 安装 uv（快速的 Python 包管理器）
 RUN pip install --no-cache-dir uv -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
 
@@ -37,8 +51,9 @@ RUN uv pip install --system -e ./workers/pingpong-worker -i https://pypi.tuna.ts
 # 3. 最后安装 worker-in-one（依赖上面所有 worker）
 RUN uv pip install --system -e ./worker-in-one -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
 
-# 创建必要的目录（视频缓存放在 /workspace 下，确保 appuser 有写入权限且可挂载卷）
-RUN mkdir -p /workspace/worker-in-one/logs
+# 复制数据库迁移脚本（容器启动前自动执行）
+COPY deploy/scripts/migrate-worker.sh /workspace/migrate-worker.sh
+RUN chmod +x /workspace/migrate-worker.sh
 
 # 创建非root用户并设置权限
 RUN adduser --disabled-password --gecos '' appuser && \

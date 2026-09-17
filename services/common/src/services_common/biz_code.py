@@ -2,34 +2,34 @@
 
 biz_code 为 8 位整数，结构如下：
 
-    biz_code = 1 SS DDD EEE
-               │ │  │   └─ 3位 业务错误序号 (001-999, 0=成功)
-               │ │  └──── 3位 业务大类 (BizCategory 枚举值)
-               │ └──────── 2位 服务编号 (00-89, 00=模板/公共占位)
-               └────────── 固定前缀 1（保证始终 8 位数）
+    biz_code = SS DDD EEE
+               │  │   └─ 3位 业务错误序号 (001-999, 0=成功)
+               │  └──── 3位 业务大类 (BizCategory 枚举值)
+               └──────── 2位 服务编号 (10-89)，直接作为 biz_code 前两位
 
-固定前缀 1 确保所有 biz_code 都是完整的 8 位整数（10,000,000 ~ 99,099,999），
-避免 service_code 较小时因整数前导零丢失导致位数不足。
+服务编号 >= 10 保证 biz_code 始终为 8 位整数（10,000,000 ~ 99,999,999）。
+服务编号 0-9 预留给模板/公共占位，不用于实际服务（会导致不足 8 位）。
 
 设计原则：
   - services_common 只提供编码规则和工具函数，不含任何服务枚举
   - 各服务在自己的 foundation/biz_code.py 中声明 SERVICE_CODE 和 BizCode
   - 服务编号全局唯一，通过 service.metadata 中的 service_code 字段管理
   - 新增服务时由 generate-service 脚本自动分配并检测冲突
+  - 服务编号 >= 10，使 biz_code 前两位直接等于服务编号（如 30 -> 30xxxxxx）
 
 示例：
     # account-service 中声明
-    SERVICE_CODE = 1  # account-service 全局唯一编号
+    SERVICE_CODE = 30  # account-service 全局唯一编号
     class BizCode(IntEnum):
-        SUCCESS             = make_biz_code(SERVICE_CODE, BizCategory.SUCCESS, 0)        # 11000000
-        AUTH_PASSWORD_ERROR = make_biz_code(SERVICE_CODE, BizCategory.AUTH, 1)           # 11002001
-        USER_NOT_FOUND      = make_biz_code(SERVICE_CODE, BizCategory.NOT_FOUND, 1)      # 11003001
+        SUCCESS             = make_biz_code(SERVICE_CODE, BizCategory.SUCCESS, 0)        # 30000000
+        AUTH_SMS_CODE_ERROR = make_biz_code(SERVICE_CODE, BizCategory.AUTH, 3)           # 30002003
+        USER_NOT_FOUND      = make_biz_code(SERVICE_CODE, BizCategory.NOT_FOUND, 2)      # 30003002
 """
 
 from enum import IntEnum
 
-# 固定基座，保证 biz_code 始终为 8 位整数
-_BIZ_CODE_BASE = 10_000_000
+# 不再使用固定前缀；服务编号 >= 10 即可保证 8 位整数
+_BIZ_CODE_BASE = 0
 
 
 class BizCategory(IntEnum):
@@ -57,24 +57,24 @@ def make_biz_code(service_code: int, category: BizCategory, seq: int) -> int:
     """组装业务码（始终返回 8 位整数）
 
     Args:
-        service_code: 服务编号 (0-89)，0 预留给模板/公共占位，实际服务使用 1-89
+        service_code: 服务编号 (10-89)，>=10 保证 biz_code 前两位直接等于服务编号
         category: 业务大类
         seq: 业务序号 (0-999)，0 通常表示成功
 
     Returns:
-        8 位整数业务码，如 11002001
+        8 位整数业务码，如 30002003
 
     Examples:
-        >>> make_biz_code(0, BizCategory.BUSINESS_RULE, 2)
+        >>> make_biz_code(10, BizCategory.BUSINESS_RULE, 2)
         10006002
-        >>> make_biz_code(1, BizCategory.AUTH, 1)
-        11002001
-        >>> make_biz_code(15, BizCategory.SUCCESS, 0)
-        25000000
+        >>> make_biz_code(30, BizCategory.AUTH, 3)
+        30002003
+        >>> make_biz_code(10, BizCategory.SUCCESS, 0)
+        10000000
     """
-    if not (0 <= service_code <= 89):
-        raise ValueError(f"service_code 必须在 0-89 之间（0 预留给模板/公共），当前: {service_code}")
-    if not (0 <= seq <= 999):
+    if not (10 <= service_code <= 99):
+        raise ValueError(f"service_code 必须在 10-99 之间（>=10 保证 8 位数），当前: {service_code}")
+    if not (0 <= seq < 999):
         raise ValueError(f"seq 必须在 0-999 之间，当前: {seq}")
     return _BIZ_CODE_BASE + service_code * 1_000_000 + int(category) * 1_000 + seq
 
@@ -89,10 +89,10 @@ def parse_biz_code(code: int) -> tuple[int, BizCategory, int]:
         (service_code, BizCategory, seq) 三元组
 
     Examples:
-        >>> parse_biz_code(11002001)
-        (1, <BizCategory.AUTH: 2>, 1)
+        >>> parse_biz_code(30002003)
+        (30, <BizCategory.AUTH: 2>, 3)
         >>> parse_biz_code(10006002)
-        (0, <BizCategory.BUSINESS_RULE: 6>, 2)
+        (10, <BizCategory.BUSINESS_RULE: 6>, 2)
     """
     value = code - _BIZ_CODE_BASE
     service_code = value // 1_000_000

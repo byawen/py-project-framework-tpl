@@ -23,6 +23,7 @@ from pingpong_service.foundation.biz_code import BizCode
 from pingpong_service.app.api.v1 import api_router
 from pingpong_service.foundation.exception_handlers import register_exception_handlers
 from pingpong_service.foundation.logging import get_logger
+from services_common import configure_idempotency
 from pingpong_service.foundation.container import set_injector
 
 from pingpong_service.clients.modules import ClientsModule
@@ -113,10 +114,13 @@ async def setup(
 
     # 设置全局 Injector
     set_injector(_injector)
-
+    configure_idempotency(injector=_injector)
     # 注册服务级 BizCode 映射（all-in-one 多服务共用 app 时，异常 handler 按路径前缀路由到本服务的 biz_code）
     _register_bizcode_mapper(api_prefix)
 
+    # 注册本服务异常处理器（统一在 setup 注册；base handler 透传领域异常自带 biz_code，
+    # all-in-one 集中栈重建保证 setup 注册的处理器生效，与 standalone 双模式一致）
+    register_exception_handlers(_app)
     if owns_redis_manager:
         logger.info(f"Redis connections initialized, service: {_settings.APP_NAME}")
     if owns_db_manager:
@@ -202,8 +206,6 @@ def create_app(_settings: Settings = None) -> FastAPI:
     app.add_middleware(ErrorHandlingMiddleware)
     app.add_middleware(RequestIDMiddleware)
 
-    # Exception handlers
-    register_exception_handlers(app)
 
     # Health check
     @app.get("/health")

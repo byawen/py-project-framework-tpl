@@ -8,6 +8,7 @@ foundation/biz_code.py 中声明 SERVICE_CODE 并组合具体的 BizCode 枚举�
 各服务应在自身领域代码中抛出带有正确 service_code 的异常。
 """
 
+from http import HTTPStatus
 from typing import Any, Optional
 
 from services_common.biz_code import BizCategory, make_biz_code
@@ -24,8 +25,21 @@ class BaseException(Exception):
         message: 人类可读的错误消息
         code: 内部错误标识字符串（用于日志，不直接暴露给前端）
         biz_code: 8位整数业务码（对外响应使用）
-        details: 额外上下文字典
+        payload: 对外响应的结构化业务数据（自动透传到响应体独立的 payload 字段，
+            如 {"retry_after": 58}、{"max_size": 1048576}）；与 detail 分工独立、互不覆盖
+        details: 内部上下文字典（仅供日志/调试，不对外暴露；保留以向后兼容）
+        status_code: HTTP 状态码（默认 HTTPStatus.BAD_REQUEST；异常可覆盖如频控 TOO_MANY_REQUESTS、过大 REQUEST_ENTITY_TOO_LARGE）
+
+    payload 与 detail 的分工（响应体两个独立字段）：
+        - payload：业务结构化数据，面向前端，确定结构，由领域/应用异常透传写入
+          ErrorResponse.payload（如 {"retry_after": 58}、{"max_size": 1048576}）。
+        - detail：调试信息，面向排障，非确定结构，由 HTTPException/校验错误处理器写入
+          ErrorResponse.detail；领域/应用异常不写 detail（保持 None）。
+        二者由不同处理器互斥写入，互不覆盖。
     """
+
+    # 默认 HTTP 状态码；子类可覆盖（如频控 TOO_MANY_REQUESTS、文件过大 REQUEST_ENTITY_TOO_LARGE）
+    status_code: int = HTTPStatus.BAD_REQUEST
 
     def __init__(
         self,
@@ -33,11 +47,16 @@ class BaseException(Exception):
         code: str = "INTERNAL_ERROR",
         biz_code: Optional[int] = None,
         details: Optional[dict[str, Any]] = None,
+        payload: Optional[dict[str, Any]] = None,
+        status_code: Optional[int] = None,
     ):
         self.message = message
         self.code = code
         self.biz_code = biz_code or make_biz_code(_COMMON_SERVICE_CODE, BizCategory.SYSTEM, 0)
         self.details = details or {}
+        self.payload = payload or None
+        if status_code is not None:
+            self.status_code = status_code
         super().__init__(self.message)
 
 
@@ -47,11 +66,20 @@ class BaseException(Exception):
 class BaseDomainException(BaseException):
     """领域基础异常类"""
 
-    def __init__(self, message: str, code: Optional[str] = None, biz_code: Optional[int] = None):
+    def __init__(
+        self,
+        message: str,
+        code: Optional[str] = None,
+        biz_code: Optional[int] = None,
+        payload: Optional[dict[str, Any]] = None,
+        status_code: Optional[int] = None,
+    ):
         super().__init__(
             message=message,
             code=code or "DOMAIN_ERROR",
             biz_code=biz_code or make_biz_code(_COMMON_SERVICE_CODE, BizCategory.BUSINESS_RULE, 0),
+            payload=payload,
+            status_code=status_code,
         )
 
 
@@ -94,11 +122,20 @@ class PasswordTooWeakException(BaseDomainException):
 class BaseApplicationException(BaseException):
     """应用基础异常类"""
 
-    def __init__(self, message: str, code: Optional[str] = None, biz_code: Optional[int] = None):
+    def __init__(
+        self,
+        message: str,
+        code: Optional[str] = None,
+        biz_code: Optional[int] = None,
+        payload: Optional[dict[str, Any]] = None,
+        status_code: Optional[int] = None,
+    ):
         super().__init__(
             message=message,
             code=code or "APPLICATION_ERROR",
             biz_code=biz_code or make_biz_code(_COMMON_SERVICE_CODE, BizCategory.BUSINESS_RULE, 1),
+            payload=payload,
+            status_code=status_code,
         )
 
 

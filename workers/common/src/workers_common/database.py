@@ -79,6 +79,9 @@ class DatabaseManager:
         pool_size: int = 20,
         max_overflow: int = 10,
         echo: bool = False,
+        # PG statement 级超时（毫秒），防止锁等待/hang 无限阻塞 worker 线程。
+        # None/0 = 不设（保持原行为）；默认由 thread_resources 从配置注入。
+        statement_timeout_ms: int | None = None,
         # 重试配置
         retry_enabled: bool = True,
         retry_max_attempts: int = 3,
@@ -89,6 +92,7 @@ class DatabaseManager:
         self.pool_size = pool_size
         self.max_overflow = max_overflow
         self.echo = echo
+        self.statement_timeout_ms = statement_timeout_ms
 
         # 重试配置
         self.retry_enabled = retry_enabled
@@ -103,6 +107,13 @@ class DatabaseManager:
     def engine(self) -> AsyncEngine:
         """获取或创建异步引擎"""
         if self._engine is None:
+            # PG statement 级超时：连接建立时通过 server_settings 注入，session 级生效。
+            # 防止单条 SQL 锁等待/hang 无限占用 worker 线程（threads pool 无法强杀线程）。
+            connect_args = {}
+            if self.statement_timeout_ms:
+                connect_args["server_settings"] = {
+                    "statement_timeout": str(self.statement_timeout_ms)
+                }
             self._engine = create_async_engine(
                 self.database_url,
                 poolclass=AsyncAdaptedQueuePool,
@@ -111,6 +122,7 @@ class DatabaseManager:
                 echo=self.echo,
                 pool_pre_ping=True,
                 pool_recycle=3600,
+                connect_args=connect_args,
                 json_serializer=lambda obj: json.dumps(sanitize_surrogates(obj), ensure_ascii=False),
             )
         return self._engine

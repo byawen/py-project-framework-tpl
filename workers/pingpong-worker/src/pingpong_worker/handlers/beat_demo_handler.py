@@ -4,8 +4,10 @@
 作为新 worker 的 Beat 定时任务参考实现。
 
 多节点幂等保护：
-- Redis 分布式锁确保同一时刻只有一个节点执行
+- RedisWorkerLock 分布式锁确保同一时刻只有一个节点执行（带自动续期）
 - 锁 TTL 覆盖单次执行最大耗时，防止死锁
+
+> acquire+业务+release 收进同一个 async 函数（一次 _run_async），续期 task 才能存活。
 
 ───────────────────────────────────────
 新增 Beat handler 流程：
@@ -17,6 +19,7 @@
 ───────────────────────────────────────
 """
 
+import socket
 import uuid
 from typing import Any
 
@@ -26,6 +29,7 @@ from workers_common.async_bridge import run_async as _run_async
 
 logger = get_logger(__name__)
 
+_INSTANCE_ID = f"{socket.gethostname()}:{uuid.uuid4().hex}"
 _LOCK_KEY = "pipo:beat_demo:leader"
 _LOCK_TTL = 120  # 2 分钟，覆盖单次执行最大耗时
 
@@ -37,8 +41,24 @@ def handle_beat_demo(self, **kwargs: Any) -> dict[str, Any]:
     - 移除 _async_dummy_heartbeat，换为真实异步业务调用
     - 通过 get_injector() 获取 Application Service 执行业务
     """
-    acquired, lock_owner = _run_async(_try_acquire_lock())
-    if not acquired:
+    return _run_async(_async_beat_demo())
+
+
+async def _async_beat_demo() -> dict[str, Any]:
+    from workers_common.redis import RedisManager, RedisWorkerLock
+
+    injector = get_injector()
+    redis_manager = injector.get(RedisManager)
+    lock = RedisWorkerLock(
+        redis=redis_manager,
+        lock_key=_LOCK_KEY,
+        ttl_seconds=_LOCK_TTL,
+        renew_seconds=max(60, _LOCK_TTL // 3),
+        owner_id=_INSTANCE_ID,
+    )
+    if not await lock.acquire():
+        current_owner = await redis_manager.get(_LOCK_KEY)
+        lock_owner = current_owner or "unknown"
         logger.debug(
             "Beat demo skipped: another node holds the lock (owner=%s)",
             lock_owner,
@@ -47,11 +67,12 @@ def handle_beat_demo(self, **kwargs: Any) -> dict[str, Any]:
 
     logger.info(
         "Beat demo: lock acquired (owner=%s)",
-        lock_owner,
+        _INSTANCE_ID,
         operation="pingpong_worker.beat_demo.lock_acquired",
     )
+    lock.start_auto_renew()
     try:
-        result = _run_async(_async_execute(lock_owner))
+        result = await _async_execute(_INSTANCE_ID)
         logger.info(
             "Beat demo completed",
             operation="pingpong_worker.beat_demo.done",
@@ -64,28 +85,13 @@ def handle_beat_demo(self, **kwargs: Any) -> dict[str, Any]:
             exc,
             operation="pingpong_worker.beat_demo.error",
         )
-        return {"skipped": False, "lock_owner": lock_owner, "error": str(exc)}
-
-
-async def _try_acquire_lock() -> tuple[bool, str]:
-    """尝试获取 Redis 分布式锁。"""
-    from workers_common.redis import RedisManager
-
-    injector = get_injector()
-    rm = injector.get(RedisManager)
-
-    lock_owner = str(uuid.uuid4())[:8]
-    acquired = await rm.set(
-        _LOCK_KEY,
-        lock_owner,
-        nx=True,
-        ex=_LOCK_TTL,
-    )
-    if acquired:
-        return True, lock_owner
-
-    current_owner = await rm.get(_LOCK_KEY)
-    return False, current_owner or "unknown"
+        return {"skipped": False, "lock_owner": _INSTANCE_ID, "error": str(exc)}
+    finally:
+        try:
+            await lock.stop_auto_renew()
+            await lock.release()
+        except Exception:
+            logger.warning("Failed to release beat demo lock", exc_info=True)
 
 
 async def _async_execute(lock_owner: str) -> dict[str, Any]:

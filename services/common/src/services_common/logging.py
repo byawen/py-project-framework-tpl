@@ -31,7 +31,7 @@ import structlog
 # ---------------------------------------------------------------------------
 # request_id 上下文（相对导入 _context，不经过 services_common/__init__.py）
 # ---------------------------------------------------------------------------
-from ._context import get_request_id
+from ._context import get_request_id, get_trace_id
 
 # ---------------------------------------------------------------------------
 # 内部状态（模块级单例）
@@ -154,6 +154,15 @@ class _RequestIDProcessor:
         return event_dict
 
 
+class _TraceIDProcessor:
+    """注入 trace_id（跨服务链路追踪标识）到每条日志。"""
+    def __call__(self, logger, method, event_dict):
+        tid = get_trace_id()
+        if tid:
+            event_dict["trace_id"] = tid
+        return event_dict
+
+
 class _JSONRenderer:
     """JSON 渲染，ensure_ascii=False 保留中文。"""
     def __call__(self, logger, method, event_dict):
@@ -226,7 +235,10 @@ class _ConsoleWriterProcessor:
     """
     def __call__(self, logger, method, event_dict):
         if _state.log_console and isinstance(event_dict, str):
-            print(event_dict, flush=True)
+            # 不使用 flush=True：在高并发下每条日志一次 fsync 会阻塞事件循环
+            # （200 RPS × ~5 条/请求 ≈ 1000 次 blocking syscall/s）。
+            # stdout 默认行缓冲（终端）或块缓冲（管道/文件），由 OS 自动 flush。
+            sys.stdout.write(event_dict + "\n")
         return event_dict
 
 
@@ -309,6 +321,7 @@ def configure_logging(
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
             _RequestIDProcessor(),
+            _TraceIDProcessor(),
             _AddLoggerNameProcessor(),
             _OperationProcessor(),
             _LevelFilterProcessor(),

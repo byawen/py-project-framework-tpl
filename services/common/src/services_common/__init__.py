@@ -42,6 +42,7 @@ from services_common.exceptions import (
 )
 from services_common.exception_handlers import register_base_exception_handlers
 from services_common.decorators import handle_exceptions
+from services_common.idempotency import idempotent, configure_idempotency
 from services_common.uvicorn_logger import configure_uvicorn_logging
 from services_common.database import BaseModel, DatabaseManager
 from services_common.redis import RedisManager
@@ -118,6 +119,8 @@ __all__ = [
     "register_base_exception_handlers",
     # Decorators
     "handle_exceptions",
+    "idempotent",
+    "configure_idempotency",
     # Redis
     "RedisManager",
     # Database

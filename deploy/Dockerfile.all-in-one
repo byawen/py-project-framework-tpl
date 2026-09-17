@@ -47,6 +47,9 @@ RUN uv pip install --system -e ./services/common -i https://pypi.tuna.tsinghua.e
 # 安装 pingpong-service（all-in-one 依赖它）
 RUN uv pip install --system -e ./services/pingpong-service -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
 
+# 安装其他服务（分批安装以减少内存使用）
+# ...
+
 # 4. 最后安装 all-in-one（依赖上面所有服务）
 RUN uv pip install --system -e ./all-in-one -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
 
@@ -55,6 +58,10 @@ RUN uv pip install --system -e ./all-in-one -i https://pypi.tuna.tsinghua.edu.cn
 
 # 创建必要的目录
 RUN mkdir -p /workspace/uploads /workspace/data /workspace/all-in-one/logs /workspace/all-in-one/static
+
+# 复制数据库迁移脚本（容器启动前自动执行）
+COPY deploy/scripts/migrate-service.sh /workspace/migrate-service.sh
+RUN chmod +x /workspace/migrate-service.sh
 
 # 创建非root用户并设置权限
 RUN adduser --disabled-password --gecos '' appuser && \
@@ -67,11 +74,14 @@ USER appuser
 WORKDIR /workspace/all-in-one
 
 # 暴露端口
-EXPOSE 8001
+EXPOSE 8002
 
 # 健康检查（给更长的启动时间）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8001/health || exit 1
+    CMD curl -f http://localhost:8002/health || exit 1
 
 # 默认命令 - 配置 workers 和超时以支持长连接和高并发
-CMD ["python", "-m", "uvicorn", "all_in_one.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2", "--loop", "uvloop", "--timeout-keep-alive", "120", "--timeout-graceful-shutdown", "30"]
+# workers 通过 UVICORN_WORKERS 环境变量配置（默认 1，SAE 不需覆盖；本地 deploy.sh 通过 env 文件设 4）
+# shell form 会被 /bin/sh -c 包裹，SIGTERM 到不了 uvicorn，--timeout-graceful-shutdown 形同虚设
+# CMD python -m uvicorn all_in_one.main:app --host 0.0.0.0 --port 8002 --workers ${UVICORN_WORKERS:-4} --loop uvloop --timeout-keep-alive 120 --timeout-graceful-shutdown 30
+CMD ["sh", "-c", "exec python -m uvicorn all_in_one.main:app --host 0.0.0.0 --port 8002 --workers ${UVICORN_WORKERS:-1} --loop uvloop --timeout-keep-alive 120 --timeout-graceful-shutdown 30"]
