@@ -3,9 +3,9 @@
 示例 handler，处理 pingpong 类型的消息任务。
 """
 
-import asyncio
-import json
 from typing import Any
+
+from workers_common.async_bridge import run_async
 
 from pingpong_worker.foundation.container import get_injector
 from pingpong_worker.foundation.logging import get_logger
@@ -33,8 +33,8 @@ def handle_pingpong_task(
     logger.info(f"Received pingpong task", payload=raw)
 
     try:
-        # 在同步 Celery worker 中运行异步代码
-        result = asyncio.run(_async_handle_pingpong(raw))
+        # 在当前工作线程的 thread-local 持久 loop 上运行异步代码（Option B）
+        result = run_async(_async_handle_pingpong(raw))
         logger.info(f"Pingpong task completed", result=result)
         return result
     except Exception as e:

@@ -24,12 +24,14 @@ class WorkerSpec:
         broker_type    : 该 worker 使用的中间件类型（celery / rabbitmq / pubsub ...）
         register_handlers: 把该 worker 的 handlers 注册进 broker 的函数
         settings       : 该 worker 的配置实例（聚合 broker 初始化时可能需要）
+        required       : 是否为必需的 worker（必需的 worker 始终启动，即使未在 ENABLED_WORKERS 中指定）
     """
 
     name: str
     broker_type: str
     register_handlers: HandlerRegisterFn
     settings: Any = None
+    required: bool = False
 
 
 __all__ = ["WorkerSpec", "HandlerRegisterFn"]

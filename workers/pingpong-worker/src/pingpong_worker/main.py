@@ -4,11 +4,9 @@ import asyncio
 from typing import Callable, Any, Coroutine
 
 from injector import Injector, Module, Binder
-from sqlalchemy.ext.asyncio.engine import AsyncEngine
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from workers_common.database import DatabaseManager
-from workers_common.redis import RedisManager
+from workers_common import thread_resources as _thread_resources
+from workers_common.async_bridge import dispose_thread_loop, install_shutdown_hook
 from workers_common.shared_resources import SharedResources
 from workers_common.logging import Logger, configure_logging, shutdown_file_logging
 
@@ -33,34 +31,29 @@ async def setup(
 
         logger = get_logger(__name__)
 
-    owns_db_manager = shared_resources is None or shared_resources.get_db() is None
-    _db_manager = shared_resources.get_db() if shared_resources else None
-    if _db_manager is None:
-        _db_manager = DatabaseManager(
-            database_url=_settings.DATABASE_URL,
-            pool_size=_settings.DB_POOL_SIZE,
-            max_overflow=_settings.DB_MAX_OVERFLOW,
-            echo=_settings.DB_ECHO,
-        )
+    # ── 资源访问器（thread-local）──────────────────────
+    # DatabaseManager / RedisManager 不再绑成进程级单例。在 --pool=threads 下，
+    # 单例 manager 的连接池会绑定到首个工作线程的 loop，其余线程复用即跨 loop 崩
+    # 改为每工作线程惰性创建一份，池绑本线程 loop —— thread-local 在 prefork 下
+    # 退化为「每进程一份」，无回归。因此统一用访问器，忽略 shared_resources 传入
+    # 的进程级共享 manager（共享 manager 是为 prefork 单例设计，threads 下不安全）。
+    def _db_provider():
+        return _thread_resources.get_or_create_db_manager(_settings)
 
-    owns_redis_manager = shared_resources is None or shared_resources.get_redis() is None
-    _redis_manager = shared_resources.get_redis() if shared_resources else None
-    if _redis_manager is None:
-        _redis_manager = RedisManager(
-            redis_url=_settings.REDIS_URL,
-            max_connections=_settings.REDIS_MAX_CONNECTIONS,
-            decode_responses=True,
-        )
+    def _redis_provider():
+        return _thread_resources.get_or_create_redis_manager(_settings)
 
     class BuiltinModule(Module):
         """预置基础模块的依赖注入"""
 
         def configure(self, binder: Binder):
             binder.bind(Settings, to=lambda: _settings, scope=None)
-            binder.bind(RedisManager, to=lambda: _redis_manager, scope=None)
-            binder.bind(DatabaseManager, to=lambda: _db_manager, scope=None)
-            binder.bind(AsyncEngine, to=lambda: _db_manager.engine, scope=None)
-            binder.bind(AsyncSession, to=lambda: _db_manager.session_maker, scope=None)
+            # scope=None：每次 injector.get 都走 provider → 取当前线程的 manager
+            from workers_common.database import DatabaseManager
+            from workers_common.redis import RedisManager
+
+            binder.bind(DatabaseManager, to=_db_provider, scope=None)
+            binder.bind(RedisManager, to=_redis_provider, scope=None)
             binder.bind(LogManager, to=LogManager, scope=None)
 
     # 创建 Injector
@@ -71,20 +64,20 @@ async def setup(
     # 设置全局 Injector
     set_injector(_injector)
 
-    if owns_redis_manager:
-        logger.info(f"Redis connections initialized, worker: {_settings.APP_NAME}")
-    if owns_db_manager:
-        logger.info(f"Database connections initialized, worker: {_settings.APP_NAME}")
-    logger.info(f"Worker initialized, worker: {_settings.APP_NAME}")
+    # 注册 async_bridge 进程级钩子（standalone 模式覆盖；worker-in-one 模式下队列子进程
+    # 也会再注册一次，幂等）。
+    install_shutdown_hook()
+
+    logger.info(f"Worker initialized (thread-local resources), worker: {_settings.APP_NAME}")
 
     async def cleaner():
-        if owns_redis_manager:
-            await _redis_manager.close()
-            logger.info(f"Redis connection closed, worker: {_settings.APP_NAME}")
-
-        if owns_db_manager:
-            await _db_manager.close()
-            logger.info(f"Database connection closed, worker: {_settings.APP_NAME}")
+        # 关闭当前线程（主线程）惰性创建的资源；工作线程的 loop/资源由各自进程的
+        # async_bridge shutdown 钩子在进程退出时释放。best-effort，不抛错。
+        try:
+            dispose_thread_loop()
+            logger.info(f"Thread-local resources disposed, worker: {_settings.APP_NAME}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed to dispose thread-local resources: {exc}")
 
     return cleaner
 

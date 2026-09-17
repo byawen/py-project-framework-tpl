@@ -5,10 +5,19 @@
   - 保留 worker 运行所需的应用、日志、数据库、Redis 等配置
 """
 
+import json
 from functools import lru_cache
-from typing import Optional
-from pydantic import Field
+from typing import Annotated, Any, Optional
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import NoDecode
+
+# DictFromEnv：env 以 JSON 字符串形式注入（值形如 {"q": 1}）。
+# NoDecode 让 pydantic-settings 跳过对 dict 字段的自动 json.loads，
+# 原始字符串进 _decode_json_map 统一解析：空串/非法 JSON 容错为 {}，
+# 避免部署误写空值导致启动崩溃。运行时仍是普通 dict。
+DictFromEnv = Annotated[dict[str, Any], NoDecode]
 
 
 class AppSettings(BaseSettings):
@@ -48,6 +57,14 @@ class DatabaseSettings(BaseSettings):
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10
     DB_ECHO: bool = False
+    # PG statement 级超时（毫秒）：防止单条 SQL 锁等待/hang 无限阻塞 worker 线程。
+    # 0 = 不设（保持原行为）；默认 300000(5min)，worker DB 操作多为单行/小批量，足够宽松。
+    DB_STATEMENT_TIMEOUT_MS: int = 300000
+
+    # per-worker DB 池开关。False 时该 worker 不创建 DB manager/pool（thread_resources
+    # 入口抛 DBDisabledError fail-fast）。各 worker 可在自己 config.py 继承时覆盖为 False
+    # 自声明 DB-FREE；env DB_ENABLED=true 可临时全局强制开池。默认 True 向后兼容。
+    DB_ENABLED: bool = True
 
 
 class RedisSettings(BaseSettings):
@@ -60,6 +77,10 @@ class RedisSettings(BaseSettings):
     REDIS_SOCKET_CONNECT_TIMEOUT: float = 5.0
     REDIS_HEALTH_CHECK_INTERVAL: int = 30
     REDIS_RETRY_ON_TIMEOUT: bool = True
+
+    # per-worker Redis 池开关，机制同 DB_ENABLED。本期默认全开不动（Redis 连接非
+    # 当前瓶颈；beat 锁等关池有风险）。字段留在此供后续按需启用。
+    REDIS_ENABLED: bool = True
 
 
 class LLMSettings(BaseSettings):
@@ -95,7 +116,7 @@ class WorkersSettings(BaseSettings):
     CELERY_ENABLE_UTC: bool = True
 
     # ── Celery 队列路由 ──
-    CELERY_TASK_ROUTES: dict = {}
+    CELERY_TASK_ROUTES: DictFromEnv = {}
     CELERY_TASK_DEFAULT_QUEUE: str = "default"
     CELERY_TASK_QUEUES: str = ""
 
@@ -104,11 +125,63 @@ class WorkersSettings(BaseSettings):
     CELERY_WORKER_LOGLEVEL: str = "info"
     CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
 
+    # ── Celery broker visibility_timeout ──
+    # Redis broker 消息可见性超时（秒），必须 > 最长 task time_limit。
+    # 默认 3600s(1h)；若任务硬超时超过 1h 必须调大，
+    # 否则任务还在跑就被 Redis 重投给另一个 worker，导致同一任务占多并发槽。
+    CELERY_BROKER_VISIBILITY_TIMEOUT_S: int = 3600
+
     # ── Celery per-queue 并发覆盖 ──
-    # JSON dict: {"queue_name": concurrency_int}
+    # dict: {"queue_name": concurrency_int}
     # 未列出的队列回退到 CELERY_WORKER_CONCURRENCY
     # worker-in-one 模式下每个队列启动独立 WorkController 消费线程
-    CELERY_QUEUE_CONCURRENCY: str = ""
+    # env 注入写 JSON 字符串（由 _decode_json_map 解析为 dict）；
+    # 缺失走默认 {}（全走默认并发），显式写空串非法（启动报错）。
+    CELERY_QUEUE_CONCURRENCY: DictFromEnv = {}
+
+    # ── Celery per-queue 执行池类型覆盖 ──
+    # dict: {"queue_name": "threads" | "prefork" | "solo"}
+    # 未列出的队列回退到 prefork（默认，向后兼容）。
+    # - threads: 线程池，省进程、IO bound 队列适用；配合 async_bridge 的
+    #   thread-local loop + thread-local 连接池（见 *_PER_THREAD 配置）。
+    # - prefork: 进程池（默认），CPU 密集队列适用，绕开 GIL 真并行。
+    # feature flag CELERY_USE_THREADS_POOL=false 时本配置被忽略，全部回退 prefork。
+    # env 注入时写 JSON 字符串（由 _decode_json_map 解析为 dict），
+    # 空字符串/缺失视为 {}（全走 prefork）。
+    CELERY_QUEUE_POOL: DictFromEnv = {}
+
+    @field_validator(
+        "CELERY_TASK_ROUTES",
+        "CELERY_QUEUE_CONCURRENCY",
+        "CELERY_QUEUE_POOL",
+        "CELERY_BEAT_SCHEDULE",
+        mode="before",
+    )
+    @classmethod
+    def _decode_json_map(cls, v: Any) -> Any:
+        """env 注入的 JSON 字符串解析为 dict；空串/解析失败容错为 {}。
+
+        字段用 NoDecode 标注，pydantic-settings 不再自动 json.loads，
+        原始字符串在此统一解析：空字符串或非法 JSON 一律兜底为 {}，
+        避免部署时误写空值导致启动崩溃。缺失（未设 env）走 class 默认值 {}。
+        """
+        if isinstance(v, str):
+            if not v.strip():
+                return {}
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                return {}
+        return v
+        return v
+
+    # ── threads 池：每工作线程连接池上限 ──
+    # threads 队列进程内每个工作线程拥有独立 loop + 独立 DB/Redis manager，
+    # 池绑本线程 loop。小常驻池 + 溢出用完即释放，兼顾复用与峰值收敛。
+    # 高并发（>10）需前置 pgbouncer transaction pooling 收敛后端真实连接。
+    DB_POOL_SIZE_PER_THREAD: int = 5
+    DB_MAX_OVERFLOW_PER_THREAD: int = 10
+    REDIS_MAX_CONNECTIONS_PER_THREAD: int = 8
 
     # ── Celery 超时 ──
     CELERY_TASK_TIME_LIMIT: int = 600
@@ -136,7 +209,7 @@ class WorkersSettings(BaseSettings):
     # CeleryBroker.start() 会自动注入 beat_schedule 并添加 --beat 启动参数。
     # 多节点幂等由 handler 内部分布式锁保证。
     CELERY_BEAT_ENABLE: bool = False
-    CELERY_BEAT_SCHEDULE: dict = {}
+    CELERY_BEAT_SCHEDULE: DictFromEnv = {}
     # Beat 持久化调度状态的文件路径（默认在当前工作目录生成 celerybeat-schedule）
     # 建议指向 logs/ 或 data/ 目录，避免污染项目根目录
     CELERY_BEAT_SCHEDULE_FILENAME: str = "./temp/celerybeat-schedule"

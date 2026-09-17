@@ -1,4 +1,4 @@
-# Service 开发指南（从 0 到 1 到部署）
+# Service 开发指南
 
 > 面向新成员的端到端实战手册。读完本文你应当能够：独立创建一个新服务、在四层 DDD 架构中实现一个完整的业务用例、接入外部服务、运行/测试/迁移，并了解它如何被部署。
 >
@@ -10,7 +10,7 @@
 
 1. [概念全景：Service 是什么](#1-概念全景service-是什么)
 2. [环境准备](#2-环境准备)
-3. [从一个新服务开始：0 到 1](#3-从一个新服务开始0-到-1)
+3. [从一个新服务开始](#3-从一个新服务开始0-到-1)
 4. [目录结构即契约](#4-目录结构即契约)
 5. [四层 DDD 架构与依赖方向](#5-四层-ddd-架构与依赖方向)
 6. [四种数据载体（DTO / Entity / Model / Client Schema）](#6-四种数据载体dto--entity--model--client-schema)
@@ -89,7 +89,7 @@ HTTP 请求 → FastAPI 中间件链 → API 层(端点)
 
 ```bash
 # 1. 克隆仓库
-git clone <repo-url> 01-claw-project && cd 01-claw-project
+git clone <repo-url> service-project && cd service-project
 
 # 2. 创建虚拟环境并安装 uv
 python3.12 -m venv .venv
@@ -140,16 +140,16 @@ services-common = { workspace = true }
 
 ---
 
-## 3. 从一个新服务开始：0 到 1
+## 3. 从一个新服务开始：
 
 本仓库**不用 cookiecutter**，而是用脚本克隆 `services/pingpong-service`（它既是参考实现，也是模板），再做有序字符串替换重命名。脚本同时会改根 `pyproject.toml`。
 
 ### 3.1 脚手架命令
 
 ```bash
-make generate-service SERVICE=<kebab名> SHORT_PREFIX=<2-10位前缀> SERVICE_CODE=<1-89的整数> PORT=<端口>
+make generate-service SERVICE=<kebab名> SHORT_PREFIX=<3-6位前缀> SERVICE_CODE=<50-99的整数> PORT=<端口>
 # 例：
-make generate-service SERVICE=my-app SHORT_PREFIX=ma SERVICE_CODE=20 PORT=8005
+make generate-service SERVICE=my-app SHORT_PREFIX=ma SERVICE_CODE=20 PORT=8050
 ```
 
 参数规则（脚本会校验）：
@@ -157,17 +157,17 @@ make generate-service SERVICE=my-app SHORT_PREFIX=ma SERVICE_CODE=20 PORT=8005
 | 参数 | 规则                                             | 示例 |
 |---|------------------------------------------------|---|
 | `SERVICE` | kebab-case，仅字母/数字/连字符，不能数字开头，不需要 “-service” 后缀 | `my-app` |
-| `SHORT_PREFIX` | 仅字母/数字，长度 2–10，不能数字开头                          | `ma` |
-| `SERVICE_CODE` | 整数 1–89，**全局唯一**（0 留给 pingpong 模板/common 兜底）   | `20` |
-| `PORT` | 1–65535，可选，默认 8000                             | `8005` |
+| `SHORT_PREFIX` | 仅字母/数字，长度 3–6，不能数字开头                          | `ma` |
+| `SERVICE_CODE` | 整数 50–99，**全局唯一**（0 留给 pingpong 模板/common 兜底）   | `20` |
+| `PORT` | 1–65535，可选，默认 8000                             | `8050` |
 
-> 选 `SERVICE_CODE` 前先看“已分配码表”（脚本报错也会提示冲突）。`SERVICE_CODE` 取值 1–89 且全局唯一（0 留给 pingpong 模板/common 占位），前缀同理要先查，避免和别的服务撞。
+> 选 `SERVICE_CODE` 前先看“已分配码表”（脚本报错也会提示冲突）。`SERVICE_CODE` 取值 50–99 且全局唯一（0 留给 pingpong 模板/common 占位），前缀同理要先查，避免和别的服务撞。
 
 ### 3.2 生成后的完整流程
 
 ```bash
 # 1. 生成，注意不需要携带“-service”后缀，例如下面 my-app 最终生成出来的是 my-app-service
-make generate-service SERVICE=my-app SHORT_PREFIX=ma SERVICE_CODE=20 PORT=8005
+make generate-service SERVICE=my-app SHORT_PREFIX=ma SERVICE_CODE=20 PORT=8050
 
 # 2. 进 venv 安装新 workspace 成员
 source .venv/bin/activate
@@ -181,11 +181,11 @@ make migrate-service SERVICE=my-app-service
 
 # 5. 启动开发
 make dev SERVICE=my-app-service
-# → PYTHONPATH=src uvicorn my_app_service.main:app --port 8005 --host 0.0.0.0 --reload
+# → PYTHONPATH=src uvicorn my_app_service.main:app --port 8050 --host 0.0.0.0 --reload
 
 # 6. 验证
-curl http://localhost:8005/health
-# 打开 http://localhost:8005/docs （DEBUG=true 时才有 Swagger）
+curl http://localhost:8050/health
+# 打开 http://localhost:8050/docs （DEBUG=true 时才有 Swagger）
 ```
 
 到这一步你已经有一个能跑的空壳服务，它继承了 pingpong 的 demo 端点（已被重命名为你的前缀）。接下来就是把 demo 换成真实业务。
@@ -1727,9 +1727,9 @@ api_router.include_router(articles_router)
 
 ```bash
 make dev SERVICE=my-app-service
-curl -X POST http://localhost:8005/api/v1/my-app/articles -H 'Content-Type: application/json' \
+curl -X POST http://localhost:8050/api/v1/my-app/articles -H 'Content-Type: application/json' \
      -d '{"title":"hello","body":"world"}'
-curl http://localhost:8005/api/v1/my-app/articles/<id>
+curl http://localhost:8050/api/v1/my-app/articles/<id>
 # 查一个不存在的 id，应当看到 biz_code 对应 ARTICLE_NOT_FOUND
 make lint-service SERVICE=my-app-service
 make test-service SERVICE=my-app-service
@@ -1746,7 +1746,7 @@ make compose-up                         # 起本地 PostgreSQL + Redis
 make compose-down
 
 # ── 创建服务 ──
-make generate-service SERVICE=xxx SHORT_PREFIX=yy SERVICE_CODE=20 PORT=8005
+make generate-service SERVICE=xxx SHORT_PREFIX=yy SERVICE_CODE=20 PORT=8050
 make install-service SERVICE=xxx-service
 
 # ── 单服务开发 ──

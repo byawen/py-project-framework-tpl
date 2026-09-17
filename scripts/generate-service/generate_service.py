@@ -63,7 +63,7 @@ def check_prefix_exists(prefix: str) -> bool:
     return False
 
 
-def get_all_replacements(service_name: str, short_prefix: str, port: str = "8000") -> list:
+def get_all_replacements(service_name: str, short_prefix: str, port: str = "8000", service_code: str = "99") -> list:
     """获取所有需要替换的内容（按顺序）"""
     snake_name = to_snake_case(service_name)
     pascal_name = toPascalCase(service_name)
@@ -84,6 +84,9 @@ def get_all_replacements(service_name: str, short_prefix: str, port: str = "8000
         # 端口替换 - 必须在 "8000" 替换之前
         ("8001", port),  # 默认端口替换
         ("8002", port),  # 默认端口替换 (Makefile)
+        
+        # 服务码替换 - 将模板中的占位 SERVICE_CODE = 99 替换为实际分配的服务码
+        ("SERVICE_CODE = 99", f"SERVICE_CODE = {service_code}"),
         
         # FastAPI 标题替换
         ("Ping Pong Service", f"{display_name} Service"),
@@ -202,7 +205,7 @@ def rename_directory(dir_path: Path, replacements: dict) -> None:
     return dir_path
 
 
-def process_service(service_name: str, short_prefix: str, port: str = "8000") -> None:
+def process_service(service_name: str, short_prefix: str, port: str = "8000", service_code: str = "99") -> None:
     """处理服务生成"""
     snake_name = to_snake_case(service_name)
     kebab_name = service_name.lower()  # new-app -> new-app
@@ -231,7 +234,7 @@ def process_service(service_name: str, short_prefix: str, port: str = "8000") ->
     shutil.copytree(TEMPLATE_SERVICE, new_service_dir, dirs_exist_ok=False, ignore=ignore_func)
     
     # 获取替换规则
-    replacements = get_all_replacements(service_name, short_prefix, port)
+    replacements = get_all_replacements(service_name, short_prefix, port, service_code)
     
     # 第一步：重命名所有目录
     rename_directory(new_service_dir, replacements)
@@ -274,7 +277,28 @@ def check_port_exists(port: str) -> bool:
     return False
 
 
-def create_metadata(service_name: str, short_prefix: str, port: str) -> None:
+def check_service_code_exists(service_code: str) -> bool:
+    """检查服务码是否已被占用"""
+    for service_dir in SERVICES_DIR.iterdir():
+        if not service_dir.is_dir():
+            continue
+        
+        metadata_file = service_dir / "service.metadata"
+        if not metadata_file.exists():
+            continue
+        
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+                if str(metadata.get("service_code", "")) == str(service_code):
+                    return True
+        except (json.JSONDecodeError, IOError):
+            continue
+    
+    return False
+
+
+def create_metadata(service_name: str, short_prefix: str, port: str, service_code: str) -> None:
     """创建 service.metadata 文件"""
     kebab_name = service_name.lower()  # new-app -> new-app
     snake_name = to_snake_case(service_name)
@@ -283,7 +307,8 @@ def create_metadata(service_name: str, short_prefix: str, port: str) -> None:
     metadata = {
         "service_name": snake_name,
         "service_prefix": short_prefix,
-        "port": port
+        "port": port,
+        "service_code": int(service_code),
     }
     
     with open(metadata_file, 'w', encoding='utf-8') as f:
@@ -378,12 +403,14 @@ def main():
     parser.add_argument("service_name", help="服务名称 (例如: new-app)")
     parser.add_argument("short_prefix", help="短前缀 (例如: na)")
     parser.add_argument("port", nargs="?", default="8000", help="服务端口 (例如: 8001)")
+    parser.add_argument("service_code", help="服务码 10-99 (例如: 20)")
     
     args = parser.parse_args()
     
     service_name = args.service_name
     short_prefix = args.short_prefix
     port = args.port
+    service_code = args.service_code
     
     # 验证参数
     if not re.match(r'^[a-zA-Z][a-zA-Z0-9-]*$', service_name):
@@ -410,6 +437,16 @@ def main():
         print(f"错误: 端口 '{port}' 必须是数字")
         sys.exit(1)
     
+    # 验证服务码
+    try:
+        code_int = int(service_code)
+        if code_int < 10 or code_int > 99:
+            print(f"错误: 服务码 '{service_code}' 必须在 10-99 之间")
+            sys.exit(1)
+    except ValueError:
+        print(f"错误: 服务码 '{service_code}' 必须是数字")
+        sys.exit(1)
+    
     # 检查服务是否已存在
     if check_service_exists(service_name):
         print(f"错误: 服务 '{service_name}' 已存在于 services 目录中")
@@ -425,12 +462,17 @@ def main():
         print(f"错误: 端口 '{port}' 已被其他服务占用")
         sys.exit(1)
     
+    # 检查服务码是否已被占用
+    if check_service_code_exists(service_code):
+        print(f"错误: 服务码 '{service_code}' 已被其他服务占用")
+        sys.exit(1)
+    
     # 生成服务
-    print(f"\n开始生成服务: {service_name} (前缀: {short_prefix}, 端口: {port})")
+    print(f"\n开始生成服务: {service_name} (前缀: {short_prefix}, 端口: {port}, 服务码: {service_code})")
     print("=" * 50)
     
-    process_service(service_name, short_prefix, port)
-    create_metadata(service_name, short_prefix, port)
+    process_service(service_name, short_prefix, port, service_code)
+    create_metadata(service_name, short_prefix, port, service_code)
     
     # 备份并更新根目录 pyproject.toml
     backup_and_update_root_pyproject(service_name)

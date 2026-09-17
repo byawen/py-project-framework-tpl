@@ -19,6 +19,7 @@ from services_common import configure_uvicorn_logging
 from services_common.database import DatabaseManager
 from services_common.redis import RedisManager
 from services_common.middleware import RequestIDMiddleware, ErrorHandlingMiddleware, LoggingMiddleware
+from services_common.httpclient import configure_default_executor
 
 from all_in_one.foundation.container import set_injector
 from all_in_one.config import Settings, get_settings
@@ -64,6 +65,10 @@ async def lifespan(app: FastAPI):
 
     # 配置 JSON 日志
     configure_uvicorn_logging()
+
+    # 扩大默认线程池（asyncio.to_thread 用），防止 all-in-one 单进程下
+    # oss2/openpyxl/base64 等同步阻塞调用打满默认 6 线程导致请求饥饿
+    configure_default_executor()
     
     # 使用 DatabaseManager 管理数据库连接
     _db_manager = DatabaseManager(

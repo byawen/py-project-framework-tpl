@@ -28,6 +28,14 @@ from workers_common.exceptions import (
 )
 from workers_common.database import BaseModel, DatabaseManager
 from workers_common.redis import RedisManager, RedisWorkerLock
+from workers_common.async_bridge import (
+    run_async,
+    get_thread_loop,
+    dispose_thread_loop,
+    install_shutdown_hook,
+    reset_thread_local,
+)
+from workers_common import thread_resources
 from workers_common.config import (
     AppSettings,
     DatabaseSettings,
@@ -74,6 +82,13 @@ __all__ = [
     # Redis
     "RedisManager",
     "RedisWorkerLock",
+    # Async bridge (thread-local loop for --pool=threads)
+    "run_async",
+    "get_thread_loop",
+    "dispose_thread_loop",
+    "install_shutdown_hook",
+    "reset_thread_local",
+    "thread_resources",
     # Config
     "AppSettings",
     "DatabaseSettings",

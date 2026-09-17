@@ -10,9 +10,9 @@ from pingpong_service.foundation.logging import get_logger
 from pingpong_service.app.api.v1.schemas.echo_task import (
     EchoTaskRequest,
     EchoTaskResponse,
-    EchoTaskDataResponse,
 )
 from pingpong_service.app.application.commands.dispatch_echo_task import DispatchEchoTaskCommand
+from pingpong_service.foundation.biz_code import BizCode
 
 router = APIRouter(prefix="/echo-task", tags=["echo-task"])
 logger = get_logger(__name__)
@@ -23,11 +23,11 @@ def get_dispatch_echo_task_command() -> DispatchEchoTaskCommand:
     return get_injector().get(DispatchEchoTaskCommand)
 
 
-@router.post("", response_model=DataResponse[EchoTaskDataResponse])
+@router.post("", response_model=DataResponse[EchoTaskResponse])
 async def dispatch_echo_task(
     request: EchoTaskRequest,
     command: DispatchEchoTaskCommand = Depends(get_dispatch_echo_task_command),
-) -> DataResponse[EchoTaskDataResponse]:
+) -> DataResponse[EchoTaskResponse]:
     """投递 echo 异步任务 - 将 message 发送到 pingpong-worker 队列"""
     logger.info("Echo task dispatch requested", message=request.message)
     result = await command.execute(request.message)
@@ -35,4 +35,4 @@ async def dispatch_echo_task(
         task_id=result.task_id,
         message=result.message,
     )
-    return success(data=response_data, message="Echo task dispatched")
+    return success(data=response_data, message="Echo task dispatched", biz_code=BizCode.SUCCESS)

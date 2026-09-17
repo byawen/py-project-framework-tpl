@@ -17,11 +17,6 @@ class PingResponse(BaseModel):
     created_at: Optional[datetime] = Field(None, description="Created at")
 
 
-class PingDataResponse(DataResponse[PingResponse]):
-    """Ping DataResponse 包装响应"""
-    pass
-
-
 # ============== Pong DTOs ==============
 
 class PongRequest(BaseModel):
@@ -35,7 +30,3 @@ class PongResponse(BaseModel):
     pong_id: Optional[str] = Field(None, description="Pong ID")
     created_at: Optional[datetime] = Field(None, description="Created at")
 
-
-class PongDataResponse(DataResponse[PongResponse]):
-    """Pong DataResponse 包装响应"""
-    pass

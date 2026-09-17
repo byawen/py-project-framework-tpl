@@ -5,6 +5,7 @@
 
 from datetime import datetime
 from enum import Enum
+from http import HTTPStatus
 from typing import Any, Generic, List, Optional, TypeVar
 
 from pydantic import BaseModel, Field
@@ -31,6 +32,7 @@ class ResponseResult(str, Enum):
     FORBIDDEN = "error.forbidden"
     NOT_FOUND = "error.not_found"
     CONFLICT = "error.conflict"
+    REQUEST_ENTITY_TOO_LARGE = "error.request_entity_too_large"
     VALIDATION_ERROR = "error.validation"
 
     # 服务器错误
@@ -38,25 +40,11 @@ class ResponseResult(str, Enum):
     SERVICE_UNAVAILABLE = "error.service_unavailable"
 
 
-class ResponseCode:
-    """响应状态码常量"""
-    
-    # 成功
-    SUCCESS = 200
-    CREATED = 201
-    NO_CONTENT = 204
-    
-    # 客户端错误
-    BAD_REQUEST = 400
-    UNAUTHORIZED = 401
-    FORBIDDEN = 403
-    NOT_FOUND = 404
-    CONFLICT = 409
-    UNPROCESSABLE_ENTITY = 422
-    
-    # 服务器错误
-    INTERNAL_SERVER_ERROR = 500
-    SERVICE_UNAVAILABLE = 503
+# HTTP 状态码统一使用标准库 http.HTTPStatus（IntEnum，完整覆盖 RFC，无需手工维护）。
+# 直接用 HTTPStatus.OK / HTTPStatus.BAD_REQUEST / HTTPStatus.TOO_MANY_REQUESTS 等。
+# ResponseCode 作为向后兼容别名保留：旧代码 ResponseCode.BAD_REQUEST 仍可用，
+# 值等同 HTTPStatus.BAD_REQUEST（int 400）。新代码请直接用 HTTPStatus。
+ResponseCode = HTTPStatus
 
 
 class BaseResponse(BaseModel):
@@ -73,7 +61,7 @@ class BaseResponse(BaseModel):
     
     api_version: str = Field(default=DEFAULT_API_VERSION, description="API 版本")
     result: ResponseResult = Field(default=ResponseResult.SUCCESS, description="响应结果标识")
-    code: int = Field(default=ResponseCode.SUCCESS, description="HTTP 状态码")
+    code: int = Field(default=HTTPStatus.OK, description="HTTP 状态码")
     biz_code: int = Field(default=0, description="业务码（8位整数，定位服务+业务场景）")
     message: str = Field(default="Success", description="响应消息")
     timestamp: datetime = Field(default_factory=datetime.now, description="响应时间戳")
@@ -156,15 +144,22 @@ class PageResponse(BaseResponse, Generic[T]):
 
 
 class ErrorResponse(BaseResponse):
-    """错误响应模型"""
-    
-    code: int = Field(default=ResponseCode.INTERNAL_SERVER_ERROR, description="HTTP 错误状态码")
+    """错误响应模型
+
+    字段说明:
+        detail: 调试/错误详情（HTTPException.detail、校验错误列表等；领域/应用异常不写此字段）
+        payload: 业务结构化数据（领域/应用异常携带，如 {"retry_after": 58}、{"max_size": 1048576}），
+                 供前端展示；与 detail 分工独立，互不覆盖
+    """
+
+    code: int = Field(default=HTTPStatus.INTERNAL_SERVER_ERROR, description="HTTP 错误状态码")
     biz_code: int = Field(default=0, description="业务码（8位整数，定位服务+业务场景）")
     result: ResponseResult = Field(default=ResponseResult.INTERNAL_ERROR, description="响应结果标识")
     message: str = Field(default="Internal Server Error", description="错误消息")
-    detail: Optional[Any] = Field(default=None, description="详细错误信息")
+    detail: Optional[Any] = Field(default=None, description="详细错误信息（HTTPException/校验错误等调试信息）")
+    payload: Optional[Any] = Field(default=None, description="业务结构化数据（异常携带，如 retry_after、max_size）")
     trace_id: Optional[str] = Field(default=None, description="请求追踪ID")
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -175,6 +170,7 @@ class ErrorResponse(BaseResponse):
                 "message": "Internal Server Error",
                 "timestamp": "2024-01-01T00:00:00Z",
                 "detail": "Database connection failed",
+                "payload": None,
                 "trace_id": "abc123"
             }
         }
@@ -204,7 +200,7 @@ def success(
     return DataResponse(
         api_version=DEFAULT_API_VERSION,
         result=result,
-        code=ResponseCode.SUCCESS,
+        code=HTTPStatus.OK,
         biz_code=biz_code,
         message=message,
         data=data,
@@ -231,7 +227,7 @@ def created(
     return DataResponse(
         api_version=DEFAULT_API_VERSION,
         result=result,
-        code=ResponseCode.CREATED,
+        code=HTTPStatus.CREATED,
         biz_code=biz_code,
         message=message,
         data=data,
@@ -260,7 +256,7 @@ def list_response(
     return ListResponse(
         api_version=DEFAULT_API_VERSION,
         result=result,
-        code=ResponseCode.SUCCESS,
+        code=HTTPStatus.OK,
         biz_code=biz_code,
         message=message,
         data=data,
@@ -296,7 +292,7 @@ def page_response(
     return PageResponse(
         api_version=DEFAULT_API_VERSION,
         result=result,
-        code=ResponseCode.SUCCESS,
+        code=HTTPStatus.OK,
         biz_code=biz_code,
         message=message,
         data=data,
@@ -309,22 +305,24 @@ def page_response(
 
 def error(
     message: str = "Internal Server Error",
-    code: int = ResponseCode.INTERNAL_SERVER_ERROR,
+    code: int = HTTPStatus.INTERNAL_SERVER_ERROR,
     detail: Any = None,
     trace_id: Optional[str] = None,
     result: ResponseResult = ResponseResult.INTERNAL_ERROR,
     biz_code: int = 0,
+    payload: Any = None,
 ) -> ErrorResponse:
     """构建错误响应
-    
+
     Args:
         message: 错误消息
         code: HTTP 错误状态码
-        detail: 详细错误信息
+        detail: 详细错误信息（调试/HTTPException/校验错误）
         trace_id: 请求追踪ID
         result: 响应结果标识
         biz_code: 业务码（精确定位服务+业务场景）
-        
+        payload: 业务结构化数据（异常携带，如 retry_after、max_size）
+
     Returns:
         ErrorResponse 实例
     """
@@ -335,6 +333,7 @@ def error(
         biz_code=biz_code,
         message=message,
         detail=detail,
+        payload=payload,
         trace_id=trace_id,
     )
 
@@ -343,7 +342,7 @@ def bad_request(message: str = "Bad Request", detail: Any = None, biz_code: int 
     """构建 400 错误响应 - 请求参数格式错误或缺失"""
     return error(
         message=message,
-        code=ResponseCode.BAD_REQUEST,
+        code=HTTPStatus.BAD_REQUEST,
         detail=detail,
         result=ResponseResult.BAD_REQUEST,
         biz_code=biz_code,
@@ -354,7 +353,7 @@ def unauthorized(message: str = "Unauthorized", detail: Any = None, biz_code: in
     """构建 401 错误响应 - 未登录或认证信息缺失"""
     return error(
         message=message,
-        code=ResponseCode.UNAUTHORIZED,
+        code=HTTPStatus.UNAUTHORIZED,
         detail=detail,
         result=ResponseResult.UNAUTHORIZED,
         biz_code=biz_code,
@@ -365,7 +364,7 @@ def forbidden(message: str = "Forbidden", detail: Any = None, biz_code: int = 0)
     """构建 403 错误响应 - 已认证但无权限访问该资源"""
     return error(
         message=message,
-        code=ResponseCode.FORBIDDEN,
+        code=HTTPStatus.FORBIDDEN,
         detail=detail,
         result=ResponseResult.FORBIDDEN,
         biz_code=biz_code,
@@ -376,7 +375,7 @@ def not_found(message: str = "Not Found", detail: Any = None, biz_code: int = 0)
     """构建 404 错误响应 - 请求的资源不存在"""
     return error(
         message=message,
-        code=ResponseCode.NOT_FOUND,
+        code=HTTPStatus.NOT_FOUND,
         detail=detail,
         result=ResponseResult.NOT_FOUND,
         biz_code=biz_code,
@@ -387,7 +386,7 @@ def conflict(message: str = "Conflict", detail: Any = None, biz_code: int = 0) -
     """构建 409 错误响应 - 资源冲突（重复创建、状态冲突）"""
     return error(
         message=message,
-        code=ResponseCode.CONFLICT,
+        code=HTTPStatus.CONFLICT,
         detail=detail,
         result=ResponseResult.CONFLICT,
         biz_code=biz_code,

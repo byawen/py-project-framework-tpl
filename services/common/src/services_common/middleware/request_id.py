@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-from services_common._context import request_id_context
+from services_common._context import request_id_context, trace_id_context
 from services_common.logging import get_logger
 from services_common.utils.id import generate_id
 
@@ -17,7 +17,16 @@ logger = get_logger(__name__)
 
 
 class RequestIDMiddleware:
-    """为每个请求添加 request_id 并记录请求/响应日志（纯 ASGI 实现）"""
+    """为每个请求添加 request_id / trace_id 并记录请求/响应日志（纯 ASGI 实现）。
+
+    同时处理两个请求标识：
+    - ``X-Request-ID``：单次请求唯一标识，缺失时生成随机值。用于请求级日志关联。
+    - ``X-Trace-ID``：跨服务链路追踪标识，上游传了就透传，缺失时生成新的。
+      用于串联一次完整业务链路（可能跨多个服务）。下游服务应通过 HTTP client
+      把 ``X-Trace-ID`` 透传给被调服务，保持整条链路同一个 trace_id。
+
+    两者都写入 ContextVar（供日志/业务读取）、``request.state``、响应头。
+    """
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -33,13 +42,33 @@ class RequestIDMiddleware:
         headers: dict[bytes, bytes] = dict(scope.get("headers", []))
         request_id = headers.get(b"x-request-id", b"").decode() or generate_id()
 
+        # 从请求头提取或生成 trace_id（跨服务链路追踪，上游传了透传，没传生成新的）
+        trace_id = headers.get(b"x-trace-id", b"").decode() or generate_id()
+
+        # 回填生成的标识到 scope["headers"]：中间件保证 X-Request-ID / X-Trace-ID
+        # 在 req.headers 中始终存在（不仅限于 ContextVar / request.state / 响应头）。
+        # 幂等装饰器读 req.headers.get("X-Request-ID") 取锚点值，回填后即使客户端
+        # 未传头，装饰器也能取到生成的唯一值——每个请求随机不同，不会误判正常请求，
+        # 只有客户端主动复用同一 ID 重试才命中幂等。
+        backfilled = False
+        if b"x-request-id" not in headers:
+            headers[b"x-request-id"] = request_id.encode()
+            backfilled = True
+        if b"x-trace-id" not in headers:
+            headers[b"x-trace-id"] = trace_id.encode()
+            backfilled = True
+        if backfilled:
+            scope["headers"] = list(headers.items())
+
         # 设置 ContextVar
         token = request_id_context.set(request_id)
+        trace_token = trace_id_context.set(trace_id)
 
-        # 写入 scope["state"] 以便下游 request.state.request_id 可用
+        # 写入 scope["state"] 以便下游 request.state.request_id / trace_id 可用
         if "state" not in scope:
             scope["state"] = {}
         scope["state"]["request_id"] = request_id
+        scope["state"]["trace_id"] = trace_id
 
         # 读取请求体用于日志（仅 JSON，与原实现一致）
         content_type = headers.get(b"content-type", b"").decode().lower()
@@ -59,11 +88,12 @@ class RequestIDMiddleware:
             f"---> {method} {path}",
             operation="http.request.request-id",
             request_id=request_id,
+            trace_id=trace_id,
             client=client_host,
             body=log_body,
         )
 
-        # 拦截 send：注入 X-Request-ID 响应头 + 采集非流式响应体用于日志
+        # 拦截 send：注入 X-Request-ID / X-Trace-ID 响应头 + 采集非流式响应体用于日志
         status_code: int | None = None
         saw_more_body = False
         res_body: bytes | None = None
@@ -75,6 +105,7 @@ class RequestIDMiddleware:
                 status_code = message["status"]
                 hdrs = list(message.get("headers", []))
                 hdrs.append((b"x-request-id", request_id.encode()))
+                hdrs.append((b"x-trace-id", trace_id.encode()))
                 message["headers"] = hdrs
 
             elif message["type"] == "http.response.body":
@@ -94,6 +125,7 @@ class RequestIDMiddleware:
                 f"<--- {method} {path}",
                 operation="http.request.request-id.start",
                 request_id=request_id,
+                trace_id=trace_id,
                 status=500,
                 duration=round(process_time, 3),
                 error="exception",
@@ -101,6 +133,7 @@ class RequestIDMiddleware:
             raise
         finally:
             request_id_context.reset(token)
+            trace_id_context.reset(trace_token)
 
         # 响应体日志（仅非流式响应）
         # res_body 赋值时已限制 <= 4096，无需二次截断
@@ -109,6 +142,7 @@ class RequestIDMiddleware:
             f"<--- {method} {path}",
             operation="http.request.request-id.finish",
             request_id=request_id,
+            trace_id=trace_id,
             status=status_code,
             duration=round(process_time, 3),
             body=res_body,

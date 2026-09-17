@@ -376,6 +376,68 @@ router = APIRouter(prefix="/api_keys", tags=["API Keys"])
 
 > 聚合路由前缀见 §5.1：每个服务 `app/api/v1/router.py` 的 `api_router = APIRouter(prefix="/v1/{kebab服务名}")`，`setup` 再挂 `prefix="/api"`，最终 `/api/v1/{kebab服务名}/...`。`{kebab服务名}` 用 `-`（如 `content-quality`），不用 `_`。
 
+### 5.1.2 幂等控制规范（`@idempotent`）
+
+写操作（POST/PUT/DELETE）易被客户端重试，导致重复创建/重复扣费。必须用 `services_common.idempotent.idempotent` 装饰器做路由级幂等。
+
+**硬约束：**
+
+1. ✅ 写操作端点**应**加 `@idempotent()`，挂在 `@router.post/...` 下面（紧贴路由装饰器）。
+2. ✅ 装饰器参数全可选：`expire_seconds`（默认 60s）、`header`（默认 `X-Request-ID`）、`account_id`（默认 False）、`body_field`（默认 None）、`key_prefix`（默认 `default`）。
+3. ✅ **header 是强制幂等锚点**：`header`（默认 `X-Request-ID`，中间件保证存在）必须有值才生成幂等 key。`account_id` / `body_field` 是**可选作用域增强**——有值时与 header **一起**组 key（按账号 / 业务实体隔离同一 header 值），取不到值则跳过，幂等退化为纯 header 幂等（仍生效）。**二者不能脱离 header 单独组 key**。只有 header 本身缺失（或显式 `header=None`）才 fail-open（放行不阻塞）。
+4. ✅ **fail-open 是硬性要求**：Redis 不可用 / 异常时一律放行，**不得阻塞 API 请求进入**。
+5. ❌ 不得在 application/domain 层自行实现 Redis 幂等锁（用装饰器统一）。
+6. ❌ 幂等只作用于**显式加了 `@idempotent` 的路由**，不得全局生效。
+
+```python
+# ✅ 写操作加幂等
+from services_common.idempotency import idempotent
+
+@router.post("", response_model=DataResponse[CreateResponse],
+             dependencies=[Depends(require_api_token)])
+@idempotent(expire_seconds=60)                              # 默认用 X-Request-ID，60s 窗口
+async def create_index(body: CreateIndexRequest, command = Depends(...)):
+    ...
+
+# ✅ 按账号隔离 + body 字段增强；account/body 取不到值时退化为纯 header 幂等（仍生效）
+@router.post("/orders")
+@idempotent(expire_seconds=300, account_id=True, body_field="order_no")
+async def create_order(...): ...
+```
+
+**启用前提**：`main.py` 的 `setup()` 在 `set_injector(_injector)` 之后必须调一次 `configure_idempotency(injector=_injector)`（脚手架模板已具备）。未注册时装饰器等价直通（fail-open）。
+
+> 行为细节：首次请求抢锁执行并缓存响应（≤64KB）；重复请求命中缓存返回首次 2xx，处理中返回 409；handler 异常时释放锁允许重试。默认键 `X-Request-ID` 由 `RequestIDMiddleware` 在缺失时回填随机值，故正常请求（不传头或传不同头）永不误判。
+
+### 5.1.3 请求标识透传规范（`X-Request-ID` / `X-TRACE-ID`）
+
+每个请求携带两个标识，职责不重叠，均由 `RequestIDMiddleware` 自动处理（无需手写）：
+
+| Header | 语义 | 缺失时 | 用途 | 跨服务透传 |
+|---|---|---|---|---|
+| `X-Request-ID` | **请求级**：单次 HTTP 请求唯一 | 自动生成随机值 | 单服务内日志关联、幂等键 | ❌ 不透传（每服务独立生成） |
+| `X-Trace-ID` | **链路级**：一次完整业务链路 | 自动生成新的 | 串联跨多服务的完整业务链路 | ✅ 必须透传 |
+
+两者职责不重叠：`request_id` 管「单服务单请求」，`trace_id` 管「跨服务全链路」。若同时转发 `request_id`，下游会用上游的 `request_id` 做幂等键，导致语义混乱。
+
+**硬约束：**
+
+1. ✅ 两个标识自动写入 ContextVar（`get_request_id()` / `get_trace_id()`）、`request.state`、响应头、每条日志。**无需手动处理**。
+2. ✅ **跨服务 HTTP 调用必须透传 `X-Trace-ID`**（仅此一个），保持链路连续。用 `get_context_headers()` 收集——它**只返回 `X-Trace-ID`**，不返回 `X-Request-ID`：
+
+   ```python
+   from services_common._context import get_context_headers
+   # 在 clients/remote_api.py 发请求时：
+   headers = {**get_context_headers(), "Authorization": token, "Content-Type": "application/json"}
+   resp = await client.post(url, headers=headers, json=payload)
+   ```
+
+3. ❌ 不得在跨服务调用时丢弃 `X-Trace-ID`（否则链路断裂，排障困难）。
+4. ❌ 不得自行生成 / 覆盖上游传来的 `X-Trace-ID`（上游传了就透传，没传才由中间件生成）。
+5. ❌ 不得跨服务转发 `X-Request-ID`（下游应自行生成；上游的 request_id 进下游会被误用为幂等键）。
+
+> `RequestIDMiddleware` 已在所有服务装配，trace-id 自动全服务生效，无需改 `main.py`。
+
 ### 5.2 Application 层（`app/application/`）—— commands / queries / services 职责三分
 
 **这三个目录是 CQRS + DDD 的职责三分，互补协作，没有"主力/备胎"之分。** 选错归属是架构腐化最常见的源头。先用矩阵定位，再按决策树落地。
@@ -1088,9 +1150,12 @@ def get_settings() -> Settings:
 - Redis：`services_common.redis.RedisManager`
 - 日志：`services_common.logging.Logger`
 - 配置基类：`services_common.config.{AppSettings,DatabaseSettings,RedisSettings}`
-- 统一响应：`services_common.{success, created, DataResponse}`（所有响应构建函数均支持 `biz_code` 参数）
+- 统一响应：`services_common.{success, created, DataResponse}`（所有响应构建函数均支持 `biz_code` 参数）；错误响应 `ErrorResponse` 含 `biz_code`/`detail`/`payload` 三字段（`detail` 调试用、`payload` 业务结构化数据，互不覆盖，详见 §13.5.4）
 - 业务码工具：`services_common.biz_code.{BizCategory, make_biz_code, parse_biz_code}`（仅编码规则和工具，不含服务枚举表）
-- 异常处理 / 中间件：`services_common.exception_handlers` / `services_common.middleware`
+- 异常处理 / 中间件：`services_common.exception_handlers`（`register_base_exception_handlers` 统一注册，自动透传 `exc` 的 `biz_code`/`status_code`/`payload`，**无需为每种异常单独注册处理器**）/ `services_common.middleware`（含 `RequestIDMiddleware`，自动处理 `X-Request-ID` / `X-Trace-ID`）
+- HTTP 状态码：统一用标准库 `http.HTTPStatus`（`services_common.response.ResponseCode` 为其向后兼容别名）；异常自定义状态码见 §13.5.3
+- 幂等控制：`services_common.idempotent.idempotent`（路由幂等装饰器）、`configure_idempotency`（启动期注册 Redis/Settings）
+- 请求标识：`services_common._context.get_request_id` / `get_trace_id` / `get_context_headers`（跨服务调用透传）
 
 > ⚠️ `services_common` 只提供 biz_code 的**编码规则和工具函数**（`BizCategory` 枚举 + `make_biz_code` / `parse_biz_code`），**不包含任何服务的业务码枚举表**。各服务在自己的 `foundation/biz_code.py` 中声明 `SERVICE_CODE` 和 `BizCode(IntEnum)`，避免依赖倒置。
 
@@ -1142,6 +1207,9 @@ def get_settings() -> Settings:
 17. ❌ **`modules.py` 顶层 import 业务类 / 缺 `scope=None` / 把 domain 接口→实现的绑定写进 DomainModule**：见 §6.1.1 四条硬约定。
 18. ❌ **重命名脚手架生成的目录或顶层包**：`generate-service` 后包名/前缀/import 根已正确，AI 不得改名，只在 `app/` 内按业务新增文件。
 19. ❌ **HTTP 路由用 `_` 连接**：path / tags / 聚合 prefix 一律 kebab-case（`/api-keys`、`tags=["api-keys"]`、`/v1/content-quality`）。仅 Python 文件名/类名/函数名/name 标识符用 snake/Pascal。见 §5.1.1。tags 不得用中文或带空格。
+20. ❌ **写操作端点不加 `@idempotent`**：POST/PUT/DELETE 易被重试导致重复创建/扣费，应加幂等装饰器（§5.1.2）。不得在 application/domain 自行实现 Redis 幂等锁。
+21. ❌ **跨服务 HTTP 调用丢弃 `X-Trace-ID`**：clients 发请求时必须用 `get_context_headers()` 透传 `X-Trace-ID`（链路级标识），保持链路连续（§5.1.3）。**不得跨服务转发 `X-Request-ID`**（请求级标识，每服务独立生成）。不得自行生成或覆盖上游传来的 trace_id。
+22. ❌ **异常手写裸 HTTP 状态码数字 / 为每种异常单独注册处理器**：HTTP 状态码统一用标准库 `http.HTTPStatus` 常量（`HTTPStatus.TOO_MANY_REQUESTS` 而非 `429`）；异常的 `biz_code`/`status_code`/`payload` 由基类 `register_base_exception_handlers` 统一透传，**不得新增 per-exception 处理器**。需向前端返回结构化数据时用 `payload=`，不得塞进 `detail`。见 §13.5。
 
 ---
 
@@ -1166,6 +1234,12 @@ def get_settings() -> Settings:
 - [ ] `remote_api` 将响应转 schema 再返回
 - [ ] 内部服务实现了 local + remote 双模式
 - [ ] DI 用"接口 → 实现"绑定，import 走完整模块路径（不依赖 `__init__` 导出）
+- [ ] **跨服务调用用 `get_context_headers()` 透传 `X-Trace-ID`**（仅此一个，不转发 `X-Request-ID`）（§5.1.3）
+
+**幂等与请求标识**
+- [ ] 写操作端点（POST/PUT/DELETE）加了 `@idempotent()`（§5.1.2）
+- [ ] `main.py` 的 `setup()` 在 `set_injector` 后调了 `configure_idempotency(injector=_injector)`
+- [ ] 幂等参数 `account_id`/`body_field` 取不到值时退化为纯 header 幂等（仍生效）；header 是强制锚点，缺失才 fail-open
 
 **DI 与配置**
 - [ ] 新增依赖已在对应 `modules.py` 注册
@@ -1180,6 +1254,9 @@ def get_settings() -> Settings:
 - [ ] 复用 `services_common`，未重复造轮子
 - [ ] DB 操作全为 async；命名符合 §10
 - [ ] **每个领域/应用异常都绑定了 BizCode 枚举成员**（非默认 0）
+- [ ] **异常自定义 HTTP 状态码用 `http.HTTPStatus` 常量**（如 `HTTPStatus.REQUEST_ENTITY_TOO_LARGE`），未手写裸数字 `413`/`429`；非 400 场景已覆盖 `status_code`（§13.5.3）
+- [ ] **异常需向前端返回结构化数据时用 `payload=`**（如 `{"retry_after":N}`/`{"max_size":N}`），未塞进 `detail`；字段名已写入对外 API 文档（§13.5.4）
+- [ ] **未为每种异常单独注册异常处理器**（基类 `register_base_exception_handlers` 统一透传 biz_code/status_code/payload）
 - [ ] **BizCode 枚举每个成员都有中文注释描述具体业务问题**
 - [ ] **新服务已在 `foundation/biz_code.py` 声明 `SERVICE_CODE`**（与 `service.metadata` 中的 `service_code` 一致）
 - [ ] **HTTP 路由命名合规**（§5.1.1）：path/tags/聚合 prefix 用 kebab（`/api-keys`、`tags=["api-keys"]`、`/v1/{kebab}`）；文件名/name 用 snake；tags 全小写英文无中文无空格
@@ -1306,7 +1383,21 @@ class BizCode(IntEnum):
 - 成员名 = `{业务对象}_{状态}` 或 `{业务动作}_{结果}`，UPPER_SNAKE，语义自解释。
 - 新增成员时先用 grep 确认同大类内最大序号，从下一个续号；禁止复用已删成员的序号。
 
-### 13.5 异常绑定 BizCode（强制）
+### 13.5 异常定义规范（BizCode + status_code + payload，强制）
+
+所有领域异常和应用异常**必须**绑定 BizCode 枚举成员；同时支持两个可选增强维度——自定义 HTTP `status_code` 和携带结构化 `payload` 数据。三者由 `services_common` 基类异常处理器**统一自动透传**到响应，**新增异常无需注册任何处理器**。
+
+#### 13.5.1 三要素一览
+
+| 维度 | 设置方式 | 默认 | 说明 |
+|---|---|---|---|
+| `biz_code` | 构造时 `biz_code=BizCode.X` | 兜底 0（不合格） | 8 位业务码，精确定位服务+场景，**强制绑定** |
+| `status_code` | 类属性覆盖 或 构造时 `status_code=` | `HTTPStatus.BAD_REQUEST`(400) | HTTP 状态码，**用标准库 `http.HTTPStatus` 常量**，禁止手写裸数字 |
+| `payload` | 构造时 `payload={"k": v}` | `None` | 对外结构化业务数据（如 `retry_after`/`max_size`），自动写入响应 `payload` 字段 |
+
+> `BaseException`/`BaseDomainException`/`BaseApplicationException` 构造签名均已接受 `payload` 与 `status_code` 参数并向下透传。基类异常处理器（`services_common.exception_handlers.register_base_exception_handlers`）统一处理，**禁止为每种异常单独注册处理器**。
+
+#### 13.5.2 BizCode 绑定（强制）
 
 所有领域异常和应用异常**必须**绑定 BizCode 枚举成员：
 
@@ -1328,12 +1419,66 @@ class ContentNotFoundException(BaseDomainException):
         super().__init__(f"content not found: {content_id}", code="CONTENT_NOT_FOUND")
 ```
 
+#### 13.5.3 自定义 HTTP 状态码（用 `http.HTTPStatus`）
+
+HTTP 状态码统一引用标准库 `http.HTTPStatus`（IntEnum，完整覆盖 RFC，无需手工维护常量），**禁止手写裸数字**（`413`/`429` 等）。两种写法：
+
+```python
+from http import HTTPStatus
+
+# ✅ 写法一：类属性覆盖（同类异常状态码固定）
+class AvatarTooLargeException(BaseApplicationException):
+    status_code = HTTPStatus.REQUEST_ENTITY_TOO_LARGE  # 413
+
+    def __init__(self, max_size: int | None = None):
+        payload = {"max_size": max_size} if max_size is not None else None
+        super().__init__("头像文件过大", code="AVATAR_TOO_LARGE",
+                         biz_code=BizCode.AVATAR_TOO_LARGE, payload=payload)
+
+# ✅ 写法二：构造时按场景传不同状态码（同一异常多种 HTTP 语义）
+class SmsSendFailedException(BaseApplicationException):
+    def __init__(self, retry_after: int | None = None):
+        payload = {"retry_after": retry_after} if retry_after is not None else None
+        http_status = (HTTPStatus.TOO_MANY_REQUESTS if retry_after is not None
+                       else HTTPStatus.BAD_GATEWAY)
+        super().__init__("短信发送失败", code="SMS_SEND_FAILED",
+                         biz_code=BizCode.SMS_SEND_FAILED,
+                         payload=payload, status_code=http_status)
+```
+
+常用映射：`BAD_REQUEST`(400·默认)、`UNAUTHORIZED`(401)、`FORBIDDEN`(403)、`NOT_FOUND`(404)、`CONFLICT`(409)、`REQUEST_ENTITY_TOO_LARGE`(413)、`UNPROCESSABLE_ENTITY`(422)、`TOO_MANY_REQUESTS`(429)、`INTERNAL_SERVER_ERROR`(500)、`BAD_GATEWAY`(502)、`SERVICE_UNAVAILABLE`(503)。
+
+> `services_common.response.ResponseCode` 是 `HTTPStatus` 的向后兼容别名，旧代码 `ResponseCode.BAD_REQUEST` 仍可用；**新代码直接用 `HTTPStatus`**，避免后续不够用又手工加常量。
+
+#### 13.5.4 携带 payload 结构化数据
+
+异常可在构造时携带 `payload`（dict），自动写入响应体独立的 `payload` 字段，供前端展示语义化信息：
+
+```python
+# 频控：429 + payload.retry_after（处理器检测到 429+retry_after 会自动加 Retry-After 响应头）
+raise SmsCodeFrequencyException(retry_after=58)
+# → {code:429, biz_code:20005003, message:"...", payload:{"retry_after":58}, detail:null}
+
+# 文件过大：413 + payload.max_size
+raise AvatarTooLargeException(max_size=1048576)
+# → {code:413, biz_code:20005002, message:"...", payload:{"max_size":1048576}, detail:null}
+```
+
+**payload 与 detail 的分工（互不覆盖，各司其职）：**
+
+| 字段 | 面向 | 结构 | 写入方 | 用途 |
+|---|---|---|---|---|
+| `payload` | 前端/调用方 | 确定（按场景约定） | 领域/应用异常（`exc.payload` 透传） | 业务结构化数据，如 `retry_after`/`max_size` |
+| `detail` | 排障 | 非确定（可能 null） | HTTPException/校验错误处理器 | 调试信息（异常详情、校验错误列表） |
+
+> ⚠️ 约定：`payload` 内的字段名由异常定义方与前端约定（如 `retry_after`/`max_size`），并写入对外 API 文档的"错误响应额外字段"。**不要把业务数据塞进 `detail`**（`detail` 是排障字段，结构不保证、前端不应依赖）。两个处理器互斥写入各自字段，不会互相覆盖。
+
 ### 13.6 响应中的 biz_code
 
 - **成功响应**：`biz_code` 固定为 `0`（表示"通用成功"）。`services_common.response.success()`/`created()` 的 `biz_code` 默认值就是 `0`，**直接用 `success(data=...)` 即可，不要传 `biz_code=BizCode.SUCCESS`**。
   - `0` 是 biz_code 的特殊占位，**不**走 8 位 `1SSDDDEEE` 结构——它不代表某个服务，只代表"通用的成功"。
   - 成功响应无需区分"哪个服务"的成功，故不复用 8 位定位能力；真正需要精确定位的是**错误**响应。
-- **错误响应**：由异常处理器自动从 `exc.biz_code` 透传到 `ErrorResponse.biz_code`（**必是 8 位 `1SSDDDEEE`**），无需手动构建。
+- **错误响应**：由异常处理器自动从 `exc.biz_code` 透传到 `ErrorResponse.biz_code`（**必是 8 位 `1SSDDDEEE`**），无需手动构建。错误响应 envelope 在 `biz_code` 之外还携带两个独立字段：`detail`（调试信息，HTTPException/校验错误写入，领域/应用异常为 null）与 `payload`（业务结构化数据，领域/应用异常的 `exc.payload` 透传，如 `{"retry_after":58}`）。二者互不覆盖，详见 §13.5.4。
 - **直接构建错误响应**（endpoint 内 catch 后自定义）：`not_found(biz_code=BizCode.CONTENT_NOT_FOUND)`（传 8 位 BizCode）。
 
 > ⚠️ 关于 `BizCode.SUCCESS`：枚举里**仍声明**它（`make_biz_code(SERVICE_CODE, BizCategory.SUCCESS, 0)`，8 位真值，如 `12000000`），但**不要传给 `success()`**。它存在的意义是：① 让"成功"在编码体系里有正式位置；② 供 `parse_biz_code` 解析/排障时标识。成功响应 envelope 里的 `biz_code` 一律是 `0`，不是 `BizCode.SUCCESS` 的 8 位值。
@@ -1486,6 +1631,8 @@ class UserRepository(ABC):
 
 ```python
 # app/domain/common/exceptions.py  （领域异常，从 services_common 继承，绑定 BizCode）
+from http import HTTPStatus
+
 from services_common.exceptions import BaseDomainException
 from {pkg}.foundation.biz_code import BizCode
 
@@ -1501,10 +1648,28 @@ class InvariantViolation(BaseDomainException):
 class UserNotFoundException(BaseDomainException):
     """用户不存在 - 查询的用户在数据库中未找到"""
 
+    # 覆盖默认 400 → 404（用标准库 HTTPStatus，禁止手写裸数字）
+    status_code = HTTPStatus.NOT_FOUND
+
     def __init__(self, user_id: str | None = None):
         msg = f"user not found: {user_id}" if user_id else "user not found"
         super().__init__(msg, code="USER_NOT_FOUND",
                          biz_code=BizCode.USER_NOT_FOUND)
+
+
+# 携带 payload + 自定义 status_code 的应用异常示例（无需注册处理器，基类自动透传）
+# from services_common.exceptions import BaseApplicationException
+#
+# class SmsCodeFrequencyException(BaseApplicationException):
+#     status_code = HTTPStatus.TOO_MANY_REQUESTS  # 429
+#     def __init__(self, retry_after: int | None = None):
+#         payload = {"retry_after": retry_after} if retry_after is not None else None
+#         super().__init__("该手机号发送过于频繁，请稍后再试",
+#                          code="SMS_CODE_FREQUENCY",
+#                          biz_code=BizCode.SMS_SEND_TOO_FREQUENT,
+#                          payload=payload)
+#         # → 响应 {code:429, biz_code:..., payload:{"retry_after":N}, detail:null}
+#         # 处理器检测到 429+retry_after 会自动加 Retry-After 响应头
 ```
 
 ### A.4 Infrastructure 层

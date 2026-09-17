@@ -88,7 +88,7 @@ migration-check:
 # ============================================================
 
 # 默认端口
-PORT ?= 8003
+PORT ?= 8002
 # .env 文件路径（相对于 account-service 目录）
 ENV_FILE ?= .env
 # 如果 .env 文件存在则设置 ENV_FILE 环境变量

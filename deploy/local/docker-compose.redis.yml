@@ -1,0 +1,24 @@
+services:
+  redis:
+    container_name: redis
+    image: redis:7.2.3
+    restart: always
+    volumes:
+      - ./local_storage/redis/data:/data
+      - ./config/redis/redis.conf:/etc/redis/redis.conf
+    ports:
+      - "6379:6379"
+    environment:
+      TZ: Asia/Shanghai
+    command: redis-server /etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vpc-net
+
+networks:
+  vpc-net:
+    name: vpc-net
